@@ -1,0 +1,31 @@
+# Dependencies and generated frontend output
+node_modules/
+dist/
+build/
+.vite/
+
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local credentials and runtime files
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+*.log
+logs/
+
+# Editor / operating system temporary files
+.history/
+*.swp
+*.tmp
+.DS_Store
+Thumbs.db
