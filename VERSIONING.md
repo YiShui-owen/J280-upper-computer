@@ -3,6 +3,20 @@
 本项目使用 Git 保存本地版本，用 GitHub 保存远程副本。
 保存文件不会自动生成 Git 版本；执行 commit 才会记录快照，push 才会同步到 GitHub。
 
+## 仓库与已保存版本
+
+远端仓库：https://github.com/YiShui-owen/J280-upper-computer
+
+- `main`：当前项目，包含提亮后的 3D 场景。
+- `baseline-3d-readable` 标签：建立版本管理时的当前源码基线。
+- `archive/previous-zip` 分支和 `previous-zip-snapshot` 标签：从用户提供的 `上位机2.zip` 恢复的上一个版本，15 个原始源码/配置文件保持原内容，另外补了 .gitignore。
+
+旧版是单独导入的历史快照，未合并或覆盖 main。可直接比较两个快照：
+
+```powershell
+git diff previous-zip-snapshot baseline-3d-readable -- frontend/src/DigitalTwin3D.vue
+```
+
 ## 每次修改前后
 
 在本目录打开 PowerShell。大改前先保存当前状态，完成并验证后再提交一次：
@@ -15,7 +29,7 @@ git commit -m "说明本次修改，例如：改善3D灯光和摆杆标定"
 git push
 ```
 
-第一次关联远程仓库后，才可以执行 push。没有需要保存的改动时不必 commit。
+远端 origin 已关联，main 使用 git push 同步。没有需要保存的改动时不必 commit。
 依赖、构建产物、Python 缓存、运行日志和本地环境变量文件已通过 .gitignore 排除；源码和 package-lock.json 会记录。
 
 ## 大改使用分支
@@ -54,3 +68,6 @@ git push
 
 项目旁边的 `../历史版本备份/20260926-3d/` 保存了本次会话找到的 8 份前端文件备份，详见其中的说明。
 这些是部分文件的历史快照，并非每个阶段的完整项目；未保存的更早改动无法由新建的 Git 历史自动找回。
+
+用户提供的 ZIP 另存于 `../历史版本备份/原始压缩包/上位机2.zip`，提取的源码和 SHA-256 清单位于同一备份目录。
+`../历史版本备份/repository-with-previous-version.bundle` 包含新旧两个版本的 Git 历史，可在新目录用 git clone 恢复。
