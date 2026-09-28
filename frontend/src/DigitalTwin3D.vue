@@ -1,17 +1,11 @@
 <template>
   <div ref="host" class="twin3d-host">
-    <div class="twin3d-corner-label">
-      <span>MECHANICAL TWIN</span>
-      <b>左键旋转 · 滚轮缩放 · 右键平移</b>
-    </div>
     <div class="twin3d-tools">
-      <button type="button" @click="resetView">重置视角</button>
-      <button v-if="isDev" type="button" :aria-expanded="calibrationOpen" @click="calibrationOpen = !calibrationOpen">
-        {{ calibrationOpen ? '隐藏标定' : 'Calibration' }}
-      </button>
+      <button type="button" title="左键旋转 · 滚轮缩放 · 右键平移" @click="resetView">重置视角</button>
+      <button v-if="calibrationOpen" type="button" @click="calibrationOpen = false">关闭标定</button>
     </div>
-    <section v-if="isDev && calibrationOpen" class="twin3d-calibration" aria-label="3D Calibration" @change="normalizeCalibration">
-      <div class="calibration-heading"><b>Calibration</b><span>仅调整 3D 映射</span></div>
+    <section v-if="calibrationOpen" class="twin3d-calibration" aria-label="姿态标定" @change="normalizeCalibration">
+      <div class="calibration-heading"><b>姿态标定</b><span>仅调整 3D 映射</span></div>
       <label>θ direction
         <select v-model.number="calibration.thetaDirection"><option :value="1">+1</option><option :value="-1">−1</option></select>
       </label>
@@ -53,8 +47,9 @@ const props = defineProps({
 })
 
 const host = ref(null)
-const isDev = import.meta.env.DEV
 const calibrationOpen = ref(false)
+function openCalibration(){ calibrationOpen.value = true }
+defineExpose({ openCalibration })
 // Angles are degrees at the telemetry boundary. Persisted values override these
 // defaults in this browser; copy the final hardware calibration here for deployment.
 const calibrationDefaults = Object.freeze({
@@ -260,8 +255,8 @@ function addScrew(parent, x, z, y=.47){
 
 function initScene(){
   scene = new THREE.Scene()
-  scene.background = new THREE.Color(0x0d2030)
-  scene.fog = new THREE.FogExp2(0x0d2030, .028)
+  // A clear dark backdrop keeps the small mechanical details crisp at every zoom.
+  scene.background = new THREE.Color(0x081522)
 
   // Preserve the original 3/4 position/target; leave headroom for the upright rod.
   camera = new THREE.PerspectiveCamera(44, 1, .1, 100)
@@ -275,7 +270,7 @@ function initScene(){
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
   renderer.outputColorSpace = THREE.SRGBColorSpace
   renderer.toneMapping = THREE.ACESFilmicToneMapping
-  renderer.toneMappingExposure = 1.18
+  renderer.toneMappingExposure = 1.0
   host.value.prepend(renderer.domElement)
 
   // Broad reflections make metal readable on its shaded faces. Generate once
@@ -284,7 +279,7 @@ function initScene(){
   const pmrem = new THREE.PMREMGenerator(renderer)
   environmentTarget = pmrem.fromScene(environment, .03)
   scene.environment = environmentTarget.texture
-  scene.environmentIntensity = .65
+  scene.environmentIntensity = .55
   environment.dispose()
   pmrem.dispose()
 
@@ -304,7 +299,7 @@ function initScene(){
   controls.update()
   controls.saveState()
 
-  scene.add(new THREE.HemisphereLight(0xe5f3ff, 0x334b61, 1.75))
+  scene.add(new THREE.HemisphereLight(0xe5f3ff, 0x182838, .95))
   const key = new THREE.DirectionalLight(0xf0f7ff, 2.8)
   key.position.set(4.3, 7.5, 4.2)
   key.castShadow = true
@@ -318,13 +313,14 @@ function initScene(){
   const rim = new THREE.PointLight(0x8bcff5, 12, 10, 2)
   rim.position.set(-3.6, 3.0, -3.6)
   scene.add(rim)
-  const fill = new THREE.PointLight(0xc9dcf0, 10, 9, 2)
+  const fill = new THREE.PointLight(0xc9dcf0, 6, 9, 2)
   fill.position.set(3.6, 2.0, 2.8)
   scene.add(fill)
 
+  // Catch contact shadows without lighting a huge opaque plane into a gray veil.
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(200, 200),
-    new THREE.MeshStandardMaterial({ color:0x040b13, roughness:.98, metalness:0, envMapIntensity:.05 })
+    new THREE.ShadowMaterial({ color:0x000000, opacity:.28, depthWrite:false })
   )
   floor.rotation.x = -Math.PI / 2
   floor.name = 'displayFloor'
@@ -514,14 +510,12 @@ function animate(now){
   const color = modeColor()
   if (motorHalo){
     motorHalo.material.color.setHex(color)
-    motorHalo.material.opacity = .35 + Math.sin(performance.now() * .0022) * .06
-    motorHalo.rotation.z += .0015
+    motorHalo.material.opacity = .35
   }
   if (stabilityMaterial){
     stabilityMaterial.color.setHex(color)
     stabilityMaterial.opacity = props.mode === 'BALANCE' ? .46 : .23
   }
-  if (stabilityHalo) stabilityHalo.scale.setScalar(1 + Math.sin(performance.now()*.0017)*.025)
 
   controls.update()
   // Orbit remains above the floor even after a downward right-button pan.
