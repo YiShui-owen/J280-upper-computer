@@ -23,7 +23,7 @@ test('all three channels share the same exact ten-second epoch window', () => {
     assert.equal(axis.max, now)
   }
   assert.deepEqual(option.axisPointer.link, [{ xAxisIndex: 'all' }])
-  assert.deepEqual(option.series.map(series => series.lineStyle.color), ['#38BDF8', '#A9D4E8', '#E4B86A'])
+  assert.deepEqual(option.series.map(series => series.lineStyle.color), ['#DBAA64', '#C7CBBE', '#97A583'])
 })
 
 test('seconds convert to millisecond coordinates and preserve irregular sample spacing', () => {
@@ -198,4 +198,25 @@ test('live updates preserve interaction models while removing expired events and
   } finally {
     chart.dispose()
   }
+})
+
+test('showcase horizontal channels preserve one time domain in three separate nonoverlapping plots', () => {
+  const option = createWaveformOption([sample(-5000), sample(0)], now, 210, [], 1500, 10000, 'horizontal')
+  assert.ok(option.grid[0].left + option.grid[0].width < option.grid[1].left)
+  assert.ok(option.grid[1].left + option.grid[1].width < option.grid[2].left)
+  assert.ok(option.grid.every(grid => grid.top === option.grid[0].top && grid.height > 0))
+  assert.ok(option.xAxis.every(axis => axis.min === now - 10000 && axis.max === now))
+  const chart = echarts.init(null, null, { renderer:'svg', ssr:true, width:1500, height:210 })
+  try {
+    chart.setOption(option)
+    const offsets = option.grid.map((grid, index) => chart.convertToPixel({ xAxisIndex:index }, now - 5000) - grid.left)
+    assert.ok(offsets.every(offset => Math.abs(offset - offsets[0]) < 1e-8))
+  } finally { chart.dispose() }
+})
+
+test('showcase event markers appear in every plot with a single event label', () => {
+  const option = createWaveformOption([], now, 210, [{ id:'probe', at:now - 5000, label:'扰动' }], 1500, 10000, 'horizontal')
+  const children = option.graphic.find(group => group.id === 'waveform-events').children
+  assert.equal(children.filter(item => item.type === 'line').length, 3)
+  assert.equal(children.filter(item => item.type === 'text').length, 1)
 })

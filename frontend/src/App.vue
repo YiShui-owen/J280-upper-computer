@@ -1,17 +1,16 @@
 <template>
   <main class="instrument-shell">
     <header class="topbar">
-      <h1>J280 <span>旋转倒立摆实时姿态控制系统</span></h1>
-      <strong class="system-state" :class="modeClass" role="status"><i></i>{{ modeLabel }}</strong>
+      <h1>J280 <span>车载旋转倒立摆</span></h1>
       <div class="system-tools">
-        <span class="connection-state" :class="{ online }"><i></i>{{ online ? '系统在线' : '数据断开' }}</span>
-        <span class="version">V5.12</span>
-        <button class="text-button" @click="settingsDialog.showModal()">工程设置</button>
+        <button class="text-button" @click="settingsDialog.showModal()">设置</button>
+        <button class="button primary" disabled title="连接小车后可启用遥控">启用遥控</button>
+        <button class="button stop" disabled title="等待小车连接">停止小车</button>
+        <button v-if="state.received_at" class="button stop hardware-stop" @click="send('STOP')">停止摆控</button>
       </div>
     </header>
 
-    <section class="workspace-grid">
-      <section class="mechanical-stage" aria-label="机械姿态展示">
+    <section class="mechanical-stage" aria-label="车载旋转倒立摆一体化展示">
         <DigitalTwin3D
           ref="digitalTwin"
           :arm-angle="Number(state.arm_angle_deg || 0)"
@@ -21,38 +20,51 @@
           :sample-tick="state.fpga_time_ms ?? null"
           :arm-velocity="state.arm_velocity_deg_s"
           :pendulum-velocity="state.angle_velocity_deg_s"
+          :left-wheel-count="car.left_count"
+          :right-wheel-count="car.right_count"
+          :steering-request="car.servo_compare"
         />
-        <div class="stage-actions">
-          <button class="button primary" @click="send('START')">自动启动</button>
-          <button class="button stop" @click="send('STOP')">停止</button>
-        </div>
-      </section>
-
-      <aside class="measurement-panel" aria-label="实时测控数据">
+      <aside class="pendulum-readouts" aria-label="摆控关键指标">
+        <h2>倒立摆</h2>
+        <strong class="system-state" :class="modeClass" role="status"><i></i>{{ modeLabel }}</strong>
         <dl class="readouts" :class="{ stale:!online }">
-          <div v-for="metric in metrics" :key="metric.key" class="readout" :class="metric.key">
+          <div v-for="metric in showcaseMetrics" :key="metric.key" class="readout" :class="metric.key">
             <dt>{{ metric.label }}<span v-if="metric.symbol">{{ metric.symbol }}</span></dt>
             <dd :class="metric.tone"><strong>{{ metric.value }}</strong><small>{{ metric.unit }}</small></dd>
-            <div v-if="metric.key === 'pwm'" class="pwm-scale" aria-hidden="true">
-              <span></span><i :style="pwmFillStyle"></i>
-            </div>
           </div>
         </dl>
-        <div class="control-info" aria-label="控制系统信息">
-          <span>{{ state.control_mode_name || 'TRUE CASCADE' }}</span>
-          <span>角度环 <b>1 ms</b></span>
-          <span>位置环 <b>10 ms</b></span>
-          <span>50 MHz</span>
-        </div>
-        <section class="waveform-section" aria-label="实时波形">
-          <header class="waveform-heading"><h2>实时波形</h2><span title="悬停显示最近 30 秒，移开恢复 10 秒">最近 {{ waveformWindowMs / 1000 }} 秒</span></header>
-          <WaveformPanel :samples="chartSamples" :now="chartNow" :events="events" @window-change="waveformWindowMs = $event" />
+      </aside>
+      <aside class="car-readouts" aria-label="移动平台反馈">
+        <h2>底盘</h2>
+        <strong class="car-phase" :class="{ running:carRunning }"><i></i>{{ carPhase }}</strong>
+        <dl class="readouts">
+          <div class="readout car-pwm">
+            <dt>左右驱动 PWM</dt>
+            <dd><strong>{{ fmt(car.left_pwm8400 == null ? null : car.left_pwm8400 / 84, 1) }}</strong><small>%</small><span class="readout-separator">/</span><strong>{{ fmt(car.right_pwm8400 == null ? null : car.right_pwm8400 / 84, 1) }}</strong><small>%</small></dd>
+          </div>
+          <div class="readout car-encoder"><dt>左右轮计数</dt><dd><strong>{{ car.left_count ?? '--' }}</strong><span class="readout-separator">/</span><strong>{{ car.right_count ?? '--' }}</strong></dd></div>
+          <div class="readout car-steering"><dt>转向指令</dt><dd><strong>{{ steeringLabel }}</strong></dd></div>
+        </dl>
+        <section class="car-main-controls" aria-label="小车遥控">
+          <CarControlPad />
         </section>
       </aside>
     </section>
 
+    <section class="waveform-section" aria-label="摆控实时响应">
+      <header class="waveform-heading"><h2>摆控波形</h2><span title="悬停显示最近 30 秒，移开恢复 10 秒">最近 {{ waveformWindowMs / 1000 }} 秒</span></header>
+      <WaveformPanel layout="horizontal" :samples="chartSamples" :now="chartNow" :events="events" @window-change="waveformWindowMs = $event" />
+    </section>
+
     <dialog ref="settingsDialog" class="engineering-dialog" @click="closeOnBackdrop">
-      <header class="dialog-heading"><h2>工程设置</h2><button class="icon-button" aria-label="关闭工程设置" @click="settingsDialog.close()">×</button></header>
+      <header class="dialog-heading"><h2>设置</h2><button class="icon-button" aria-label="关闭设置" @click="settingsDialog.close()">×</button></header>
+      <CarControlPanel />
+      <section class="hardware-settings">
+        <h3>实机摆控 · V5.12</h3>
+        <div class="debug-actions"><button class="button primary compact" @click="send('START')">自动启动</button><button class="button stop compact" @click="send('STOP')">停止摆控</button></div>
+        <p>命令由原 tuner 执行；写入成功不代表动作完成，参数生效请核对实际遥测。</p>
+        <div class="control-info"><span>{{ state.control_mode_name || 'TRUE CASCADE' }}</span><span>角度环 1 ms</span><span>位置环 10 ms</span><span>50 MHz</span></div>
+      </section>
       <form @submit.prevent="applyPid">
         <h3>PID 参数</h3>
         <div class="pid-fields">
@@ -83,6 +95,14 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef } from 'vue'
 import DigitalTwin3D from './DigitalTwin3D.vue'
 import WaveformPanel from './WaveformPanel.vue'
+import CarControlPanel from './CarControlPanel.vue'
+import CarControlPad from './CarControlPad.vue'
+
+// 小车功能待实物联调；当前页面仅呈现待接入界面，不生成反馈或发送控制。
+const car = Object.freeze({ left_count:null, right_count:null, left_pwm8400:null, right_pwm8400:null, servo_compare:null })
+const carRunning = false
+const carPhase = '未连接'
+const steeringLabel = '--'
 
 const API = 'http://127.0.0.1:8000'
 const WS = 'ws://127.0.0.1:8000/ws'
@@ -114,7 +134,7 @@ let destroyed = false
 
 const online = computed(() => Boolean(state.received_at) && clock.value / 1000 - Number(state.received_at) < 2)
 const modeClass = computed(() => !online.value ? 'idle' : ({ BALANCE:'balance', SWING:'swing', FAULT:'fault', ZERO:'zero' }[state.mode_name] || 'idle'))
-const modeLabel = computed(() => !online.value ? (state.received_at ? '数据中断' : '待机') : ({ BALANCE:'平衡', SWING:'起摆', FAULT:'故障', ZERO:'归零', IDLE:'待机' }[state.mode_name] || '待机'))
+const modeLabel = computed(() => !online.value ? (state.received_at ? '数据中断' : '无数据') : ({ BALANCE:'平衡', SWING:'起摆', FAULT:'故障', ZERO:'归零', IDLE:'待机' }[state.mode_name] || '待机'))
 const rmsAngle = computed(() => {
   // New telemetry may arrive between the 500 ms connection-status ticks.
   const nowSec = Math.max(clock.value, Date.now()) / 1000
@@ -130,8 +150,9 @@ const metrics = computed(() => [
   { key:'velocity', label:'摆杆角速度', symbol:'ω', value:reading(state.angle_velocity_deg_s, 2), unit:'°/s', tone:'' },
   { key:'arm', label:'旋臂角度', symbol:'θ', value:reading(state.arm_angle_deg, 2), unit:'°', tone:'' },
   { key:'pwm', label:'PWM', value:state.received_at ? fmtSigned(state.duty_actual_percent, 1) : '--', unit:'%', tone:'amber' },
-  { key:'rms', label:'RMS · 近 3 秒', value:rmsAngle.value === null ? '--' : rmsAngle.value.toFixed(3), unit:'°', tone:'' },
+  { key:'rms', label:'3 秒 RMS', value:rmsAngle.value === null ? '--' : rmsAngle.value.toFixed(3), unit:'°', tone:'' },
 ])
+const showcaseMetrics = computed(() => ['angle', 'arm', 'rms'].map(key => metrics.value.find(metric => metric.key === key)))
 const pwmFillStyle = computed(() => {
   const duty = Number(state.duty_actual_percent || 0)
   const width = Math.min(50, Math.abs(duty) / 60 * 50)

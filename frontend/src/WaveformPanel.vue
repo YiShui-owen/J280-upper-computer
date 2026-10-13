@@ -1,7 +1,7 @@
 <template>
   <div class="waveform-panel" @pointerenter="enterHistory" @pointermove="trackPointer" @pointerleave="leaveHistory">
     <div ref="chartRef" class="waveform-chart" role="img" :aria-label="`最近${windowMs / 1000}秒摆杆偏角、摆杆角速度与PWM波形`"></div>
-    <div v-if="!hasData" class="waveform-empty" role="status">等待遥测数据</div>
+    <div v-if="!hasData" class="waveform-empty" role="status">暂无数据</div>
   </div>
 </template>
 
@@ -14,6 +14,7 @@ const props = defineProps({
   samples: { type: Array, default: () => [] },
   now: { type: Number, required: true },
   events: { type: Array, default: () => [] },
+  layout: { type: String, default: 'stacked' },
 })
 const emit = defineEmits(['window-change'])
 const windowMs = ref(10000)
@@ -47,7 +48,7 @@ function setWindow(value) {
 function render() {
   frame = null
   if (!chart || !chartRef.value) return
-  const option = createWaveformOption(props.samples, props.now, chart.getHeight(), props.events, chart.getWidth(), windowMs.value)
+  const option = createWaveformOption(props.samples, props.now, chart.getHeight(), props.events, chart.getWidth(), windowMs.value, props.layout)
   hasData.value = option.series.some(series => series.data.some(point => point[1] !== null))
   updateWaveformChart(chart, option)
   if (pointer) {
@@ -63,7 +64,7 @@ function scheduleRender() {
 }
 
 // The parent supplies fresh snapshots, so a shallow watch avoids traversing all telemetry every update.
-watch(() => [props.samples, props.now, props.events, windowMs.value], scheduleRender)
+watch(() => [props.samples, props.now, props.events, props.layout, windowMs.value], scheduleRender)
 
 onMounted(() => {
   chart = echarts.init(chartRef.value)
@@ -108,8 +109,8 @@ onBeforeUnmount(() => {
   left: 50%;
   transform: translate(-50%, -50%);
   padding: 6px 10px;
-  background: #102032;
-  color: #a9bbc9;
+  background: #242622;
+  color: #A6AA9B;
   font-size: 12px;
   pointer-events: none;
   white-space: nowrap;

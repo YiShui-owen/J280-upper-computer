@@ -1,0 +1,2 @@
+# 保留 STEP 原件字节，避免换行转换破坏资产元数据中的 SHA256。
+frontend/model-sources/*.step binary
