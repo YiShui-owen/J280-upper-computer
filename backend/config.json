@@ -1,5 +1,4 @@
 {
-  "tuner_project_dir": "D:\\FPGA\\实验\\J280_V512_1MS10MS_PID_HANDOFF_20260924\\project",
-  "log_glob": "v512_1ms_10ms_home_m29_v2_*.log",
-  "mailbox_name": "v512_1ms_10ms_remote_cmd.txt"
+  "bridge_port": 8371,
+  "firmware_variant": "SG21"
 }

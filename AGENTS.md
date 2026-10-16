@@ -1,63 +1,66 @@
 # 项目协作规则
 
-## 架构与文件定位
+这是 J280 旋转倒立摆展示上位机，支持 2026-10-15 的 SG21 / SA21 / SP24 交付。链路为 `FPGA → UART → 配套 Host（唯一串口所有者）→ 本机 HTTP → FastAPI → WebSocket → Vue`。旧 V5.12 日志/mailbox 链路已替换，不按历史文档恢复旧协议。
 
-这是 J280 FPGA 旋转倒立摆的展示型上位机。数据链路为 `FPGA → UART → 外部 V5.12 tuner → 日志 → FastAPI → WebSocket → Vue`；命令反向经 FastAPI 写入 tuner 的 mailbox。COM 口由 tuner 独占，本仓库不包含 FPGA 控制逻辑或 tuner 主程序。
+技术栈为 Python/FastAPI/uvicorn、Vue/Vite、ECharts、Three.js。依赖以 `backend/requirements.txt`、前端 package/锁文件为准。
 
-技术栈：后端 Python、FastAPI、uvicorn；前端 Vue 3、Vite、JavaScript ES 模块、ECharts、Three.js。依赖以 `backend/requirements.txt`、`frontend/package.json` 和锁文件为准。
+|文件|职责|
+|---|---|
+|`backend/host_bridge.py`|固定 loopback HTTP 客户端、身份/命令检查、分页遥测转换与去重|
+|`backend/sp24_telemetry.py`、`host/sp24_bridge.py`|SP24原Host外层只读游标历史、精确帧时间/原点/有效性适配；不改控制|
+|`backend/main.py`|Host 轮询、30 秒历史、WebSocket、`/snapshot`、`/health`、`/config`、`/command`、`/requests/{id}`、模板下载|
+|`backend/config.json`|本机桥端口与预期固件版本，默认 8371 / auto|
+|`host/gesture/host`、`host/adaptive/host`|用户交付的原样 Host、测试、指南、模板；来源与清单见 `host/README.md` 和 `MANIFEST_SHA256.json`|
+|`host/sp24/gesture/host`、`host/sp24/presets`|SP24原样运行依赖、参数预设及来源哈希；launcher precise安装只读桥|
+|`frontend/src/HostControlPanel.vue`、`hostPresentation.js`|摆控设置、PID/起摆/手势/SA21 配置、操作状态、样本缓存与 RMS|
+|`frontend/src/App.vue`、`GesturePanel.vue`|无车实验台/车载遥控台、真实摆控数据、30 秒缓存、主页面手势|
+|`DigitalTwin3D.vue`、`pendulumModel.js`、`pendulumLoad.js`、`pendulumCalibration.js`|用户 STEP 模型、按固件保存的显示标定/下垂对齐、显示插值及可切换挂载；原件见 `frontend/model-sources`|
+|`WaveformPanel.vue`、`waveform.js`|按页分通道的真实波形，10 秒窗口，悬停 30 秒|
+|`preciseWaveform.js`|SP24摆角/ref、旋臂局部角/目标、PWM；板端轴、缺帧断线、保峰抽点|
+|`CarControlPanel.vue`、`CarControlPad.vue`、`useCarControl.js`、`carInput.js`|显式 BLE 连接、按住遥控、键盘与输入取消；不调用旧模拟源码|
+|`backend/car_service.py`、`car_api.py`、`car/`|原样交付 BLE 依赖、独占线程、输入租约、会话/序号、独立 `/car` HTTP 接口|
 
-| 文件 | 职责 |
-| --- | --- |
-| `backend/main.py` | 解析十六进制遥测、跟读最新日志；提供 `/health`、`/snapshot`、`/ws`、`/command`、`/config` |
-| `backend/config.json` | `tuner_project_dir`、`log_glob`、`mailbox_name` 定位外部工程、日志与命令文件 |
-| `frontend/src/App.vue` | 比赛展示布局、小车待接入空态、真实摆控状态、30 秒缓存、近 3 秒 RMS、WebSocket 重连与原 START/STOP/PID 命令；工程操作在演示设置中 |
-| `frontend/src/CarControlPanel.vue`、`CarControlPad.vue` | 设置中的小车连接 UI 与主画面方向按钮；等待实车，控件尚未启用 |
-| `frontend/src/DigitalTwin3D.vue` | 一体化车载 Three.js 模型、轮转示意、相机交互、原姿态映射、显示插值及浏览器本地标定 |
-| `frontend/src/pendulumModel.js`、`assets/models/`、`model-sources/` | 用户 STEP 摆杆及网页 GLB 资产、等比显示适配；转换方法见 `frontend/model-sources/README.md` |
-| `frontend/src/WaveformPanel.vue`、`waveform.js` | ECharts 实例与横向/堆叠三通道波形；默认 10 秒，悬停 30 秒并继续滚动 |
-| `frontend/src/carSimulation.js`、`useCarPresentation.js` | 旧版离线底盘模拟源码，当前页面不调用 |
-| `frontend/src/style.css` | 页面布局与响应式样式；`main.js`、`index.html` 为入口 |
-| `frontend/tests/waveform.test.js` | Node 内置测试，覆盖数据、时间轴、空值、事件与 ECharts 更新 |
+## 工作方式
 
-使用说明见 `README_CN.md`，版本管理见 `VERSIONING.md`。`frontend/README_覆盖说明.txt` 和 `docs/superpowers/plans/` 含历史方案；与当前源码不一致时以源码为准，不按旧覆盖说明替换现有文件。当前先设计小车 UI，等拿到实物再继续功能接入；不启用模拟动作，不将实车控制、定位或联合闭环写成已实现功能。
+版本约定（用户于2026-10-16明确）：日常使用始终以用户最新交付为准。后续适配将最新交付作为唯一日常启动和页面入口；历史版本仅在仓库中备份供追溯，不再默认保留多版本并列选择。当前这次已完成的SG21／SA21／SP24并列实现按用户要求暂时保持，不因记录此约定立即清理或修改功能；下次版本适配时遵循本约定。记录约定本身不代表授权自动提交或推送仓库。
 
-## 启动与配置
+界面基准（用户于2026-10-16确认）：当前 UI 设计已通过，见 `DESIGN.md` 第10节及 `docs/design/2026-10-16/` 的离线参考图。后续沿用石墨灰、银色模型、少量琥珀色操作、桌面模型向上和左右跨列绘制、手势区等线字体及统一字阶；不默认恢复文字黑色衬底、模糊阴影或堆叠小字说明。除用户进一步要求，不主动重排已通过的布局。
 
-- 实机运行前，先按外部 tuner 工程的 `START_HERE.bat` 流程完成烧录、抓零并保持 tuner 运行；该脚本不在本仓库。核对 `backend/config.json` 的路径、日志匹配规则及 mailbox 文件名。
-- 首次安装使用根目录 `INSTALL_ONCE.bat`；日常启动使用 `START_SHOWCASE.bat`。后端为 `http://127.0.0.1:8000`，页面为 `http://localhost:5173`。
-- 手动启动：在 `backend` 执行 `python -m uvicorn main:app --host 127.0.0.1 --port 8000`；另在 `frontend` 执行 `npm run dev`。页面 API/WS 地址、Vite 端口与后端 CORS 配置须保持对应。
+所有沟通、总结与说明使用中文。修改前查看 git 状态、相关实现、调用方与测试；保留用户未提交改动。优先最小范围修改，不做无关依赖升级、重构或参数调整。跨模块联调任务先给简短计划，不强制为每次修改创建分支、设计审批或提交。
 
-## 修改方式
+原始交付源码作为配套依赖保存；未经明确授权不改变其中控制算法、UART/CRC、身份、ID/ACK/读回规则、参数默认值、安全限幅、抓零、起摆/交接/故障保护。修改 Host 时同步维护来源说明和哈希，不能伪装为原版。
 
-- 修改前阅读相关实现、调用方、配置与测试，查看 `git status` 和有关差异；保留用户已有未提交改动。
-- 优先最小范围修改，不做无关重构、依赖升级或顺带调整硬件参数。
-- 简单任务直接执行；跨模块或影响软硬件联调的复杂任务先给简短计划。按任务需要安排检查，不强制每次改动都经历设计文档、分支或多轮审批。
+## 通信与数据保护
 
-## 通信、控制与展示保护
+- SG21 身份对为 `53473231 / 53475421`，SA21 为 `53413231 / 53415421`，SP24 为 `53503234 / 53505424`；验证完整身份，普通写操作匹配预期版本。STOP 可发送给已识别的另一受支持 Host。
+- COM 始终由对应 Host 管理；网页不自动连接串口、恢复参数、导入配置、起摆或切换自适应。不得擅自运行烧录、抓零、运动或参数命令来测试。
+- 网页命令仅显式转发一次，保留 request_id；HTTP 200、accepted、ACK 不等于动作完成。超时为结果未知，不重发，使用查询恢复结果。
+- PID 整组恢复是六个增益、积分使能、角度 D 滤波、角度窗口九项。实际写入顺序和独立读回由原 Host 引擎管理；不把网页草稿、历史参考值标记为实际读回。
+- 遥测的有符号 Q20 弧度转角度、Q15 PWM 转百分比和 SA21 Q24 增益保持原含义。分页保留独立设备时间，不拼接成同步快照；同一页相同设备时间不产生新波形点。
+- `received_at` / `observed_at` 是本机秒时间戳；图表 `now`、事件为毫秒；设备 `fpga_time_ms` 不能混用。波形 channels 指定所属通道，不能为别的页插入假数据或缺口。
+- SG21／SA21 compact页未提供旋臂绝对角与硬件零点、位置目标/误差、参考角等旧字段，保持空值；SP24的目标/参考仅按精确帧真实有效性显示。3D旋臂姿态为示意，SP24局部原点同样不代表机械零点。显示标定不改写原始遥测或控制参数。
+- SA21 配置须由原 Host 进行来源/可表示性筛选，不虚构 Ku/Tu 或误差尺度。导入保持自适应关闭，实际采用只在合格 BALANCE 后生效。
+- 小车软件已接入用户交付 WH-BLE102 HOLD_V2 驱动，实机尚未验证；不生成假曲线、假在线、模拟运动、未知标定车速/位移或联合闭环完成标记。BLE 搜索、选择、连接、启用均由用户显式操作，不自动重连。遥控连接、车辆 CAR2 反馈与倒立摆链路分别判断，反馈过期收起读数。
+- 场景及空载/有负载只影响模型显示，不检测实际负载、切 PID 或启用自适应。小车 STOP 与摆控 STOP 分别发送；按住输入、松开停车，失焦/隐藏/设置/切场景取消遥控。输入租约失效不得由后台续租；STOP 后旧 token/旧序号不能恢复动作。复用 `car/vendor` 原始协议，不擅自调整力度、停车、回中或保护逻辑。
+- SP24原Host保持原样；外层桥只读内存历史，游标缺口明确报告。100Hz样本按板端sample/capture分别绘制，宽整数到JS前为十进制字符串，局部原点不代表机械零点；原始30秒缓存不随抽点删除。250ms精确流stale不能被低速页刷新掩盖，停机新测量与PID有效目标/参考分别判断。
+- SP24上滑起摆、左右相对定位/反向取消；起摆到实际BALANCE/HOLD接管完成前包括挥手的所有手势均忽略，独立STOP不受影响。page8事件、page9当前runtime和其独立到达时间分开；重连首份保留事件不是新手势。
+- SP24定位参数及六项预设均显式STOP写；E工程候选仅影子资格，导入后保持关闭，不自动组合候选、标零、RUN或启用实际采用。SG21旧提示与SA21原profile守卫仍按各自版本执行。
 
-- 未经用户明确确认，不修改 UART/遥测协议、字段含义、符号位与定点换算、命令格式和顺序、控制算法、安全限制或硬件相关参数；包括 PID 默认值、PWM/REF 限制、抓零、HOME-M29 起摆、STOP 与故障处理。已有明确授权无需重复确认。
-- 保留 tuner 对 COM 口及启动/停止流程的管理，展示层不得擅自直接打开串口或绕过 tuner。`/command` 返回成功仅证明 mailbox 写入成功，参数生效与动作完成须通过遥测或实机确认。
-- 保护现有 PID 下发链路：界面逐项发送 `AKP`、`AKD`、`PKP`、`PKD`；后端还接受 `PKI`、`PWM`、`REF` 等前缀。不得在界面调整中擅自增删命令、改变默认值或下发顺序。
-- 遥测保持现有 Q20 弧度转角度、Q15 转百分比及有符号解析；`received_at` 为本机秒时间戳，图表的 `now`、事件时间为毫秒，`fpga_time_ms` 为设备时间，不得混用。
-- 读数和波形使用真实遥测，无数据保持空态，无效值保留缺口；不得生成假曲线、假在线状态或把已写入命令标为实机完成。3D 标定与平滑仅用于显示，不能改写原始遥测、波形或控制参数。
+## 启动与验证
 
-## 检查与验证边界
+使用摆控时先运行 `START_HOST.bat` 选择已烧录版本，在 Host 中明确连接串口；再运行 `START_SHOWCASE.bat`。仅查看界面或小车遥控可不启动摆控 Host。网页设置可修改本机桥端口/预期版本。FastAPI 为 `127.0.0.1:8000`，Vue 为 `localhost:5173`，CORS/WS/端口须对应；小车 BLE 在车载页另行显式搜索、选择、连接和启用。
 
-修改后执行与影响范围相符且能实际运行的检查，并记录结果。前端数据、波形或组件变更使用已有命令（在 `frontend`）：
+修改后执行相关检查：
 
 ```powershell
-node --test tests/waveform.test.js tests/carSimulation.test.js tests/pendulumModel.test.js
+.\.venv\Scripts\python.exe -B -X utf8 -m unittest discover -s backend
+```
+
+前端目录：
+
+```powershell
+node --test tests/*.test.js
 npm run build
 ```
 
-当前未配置后端自动测试套件。后端修改至少检查 Python 语法、JSON 配置，并按影响范围验证遥测解析或接口；只做文档修改可使用不写缓存的语法检查（在项目根目录）：
-
-```powershell
-python -c "import ast; from pathlib import Path; ast.parse(Path('backend/main.py').read_text(encoding='utf-8'))"
-```
-
-涉及界面或 3D 的修改，检查空态、断流、时间窗口、姿态映射和受影响交互；布局按现有 1600×900、1920×1080、2560×1440 目标核对。检查不得擅自向实机发送运动、扰动或参数命令，也不得自动烧录、抓零。无法验证的串口、参数生效、起摆、平衡与停止功能，明确列为“未实机验证”，离线测试和构建通过不能代替联调验收。
-
-## 沟通与交付
-
-所有沟通、改动总结和操作说明使用中文，保留代码标识符与协议命令原文。完成时说明改了什么、检查结果及未验证项；检查受环境限制或发现范围外问题时如实说明，不擅自扩大修改范围。
+涉及界面、波形或 3D 时检查空态、断流、分页时间、姿态映射、操作状态和受影响交互，主画面按 1600×900、1920×1080、2560×1440 检查。验证只使用明确的离线 fixture 或 `--offline-preview` Host；不自动连接 COM/JTAG。离线测试、构建及内部时序通过均不能替代真实起摆、停止、方向、负重与温度/电压验收。完成时说明实际检查结果与未实机验证项。

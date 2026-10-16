@@ -1,6 +1,6 @@
 <template>
   <div class="waveform-panel" @pointerenter="enterHistory" @pointermove="trackPointer" @pointerleave="leaveHistory">
-    <div ref="chartRef" class="waveform-chart" role="img" :aria-label="`最近${windowMs / 1000}秒摆杆偏角、摆杆角速度与PWM波形`"></div>
+    <div ref="chartRef" class="waveform-chart" role="img" :aria-label="firmware === 'SP24' ? `最近${windowMs / 1000}秒摆角与参考、旋臂局部角与目标、实际PWM板端时间波形；局部原点计数${originCount || '未知'}` : `最近${windowMs / 1000}秒摆杆偏角、摆杆角速度与PWM波形`"></div>
     <div v-if="!hasData" class="waveform-empty" role="status">暂无数据</div>
   </div>
 </template>
@@ -9,12 +9,15 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as echarts from 'echarts'
 import { createWaveformOption, updateWaveformChart } from './waveform.js'
+import { createPreciseWaveformOption } from './preciseWaveform.js'
 
 const props = defineProps({
   samples: { type: Array, default: () => [] },
   now: { type: Number, required: true },
   events: { type: Array, default: () => [] },
   layout: { type: String, default: 'stacked' },
+  firmware: { type: String, default: '' },
+  originCount: { type: String, default: '' },
 })
 const emit = defineEmits(['window-change'])
 const windowMs = ref(10000)
@@ -24,6 +27,7 @@ let chart = null
 let observer = null
 let frame = null
 let pointer = null
+let preciseMode = null
 
 function trackPointer(event) {
   pointer = { clientX:event.clientX, clientY:event.clientY }
@@ -48,7 +52,18 @@ function setWindow(value) {
 function render() {
   frame = null
   if (!chart || !chartRef.value) return
-  const option = createWaveformOption(props.samples, props.now, chart.getHeight(), props.events, chart.getWidth(), windowMs.value, props.layout)
+  const precise = props.firmware === 'SP24'
+  // Different firmware has a different series set. Clear once at a mode change,
+  // then preserve tooltip/cursor models during normal live updates as before.
+  if (preciseMode !== null && preciseMode !== precise) chart.clear()
+  preciseMode = precise
+  const createOption = precise ? createPreciseWaveformOption : createWaveformOption
+  const option = createOption(props.samples, props.now, chart.getHeight(), props.events, chart.getWidth(), windowMs.value, props.layout)
+  const originCount = props.originCount
+  if (precise && /^-?\d+$/.test(originCount)) {
+    const formatter = option.tooltip.formatter
+    option.tooltip.formatter = params => `局部原点计数：${originCount}<br/>${formatter(params)}`
+  }
   hasData.value = option.series.some(series => series.data.some(point => point[1] !== null))
   updateWaveformChart(chart, option)
   if (pointer) {
@@ -64,7 +79,7 @@ function scheduleRender() {
 }
 
 // The parent supplies fresh snapshots, so a shallow watch avoids traversing all telemetry every update.
-watch(() => [props.samples, props.now, props.events, props.layout, windowMs.value], scheduleRender)
+watch(() => [props.samples, props.now, props.events, props.layout, props.firmware, props.originCount, windowMs.value], scheduleRender)
 
 onMounted(() => {
   chart = echarts.init(chartRef.value)

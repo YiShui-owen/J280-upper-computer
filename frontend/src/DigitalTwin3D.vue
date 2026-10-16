@@ -2,6 +2,7 @@
   <div ref="host" class="twin3d-host">
     <div class="twin3d-tools">
       <button type="button" title="左键旋转 · 滚轮缩放 · 右键平移" @click="resetView">重置视角</button>
+      <button type="button" :disabled="!canAlignDown" title="实物自然下垂并静止时点击，仅调整 3D 显示" @click="alignDown">下垂对齐</button>
       <button v-if="calibrationOpen" type="button" @click="calibrationOpen = false">关闭标定</button>
     </div>
     <section v-if="calibrationOpen" class="twin3d-calibration" aria-label="姿态标定" @change="normalizeCalibration">
@@ -28,21 +29,27 @@
       <button type="button" @click="restoreCalibration">恢复默认标定</button>
     </section>
     <p v-if="modelError" class="twin3d-model-error" role="status">{{ modelError }}</p>
+    <p v-if="calibrationNotice" class="twin3d-display-note" role="status">{{ calibrationNotice }}</p>
   </div>
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
-import { PENDULUM_DISPLAY, mountPendulumModel, disposePendulumModel } from './pendulumModel.js'
+import { mountPendulumModel, disposePendulumModel } from './pendulumModel.js'
+import { createPendulumLoad, updatePendulumLoadPose } from './pendulumLoad.js'
+import { createBenchSupport, setSceneMode } from './pendulumScene.js'
+import { calibrationDefaults, calibrationStorageKey, normalizeCalibration as normalizeDisplayCalibration, alphaReferencesValid, displayAlphaDeg, calibrateDownPose } from './pendulumCalibration.js'
 import pendulumAssetMetadata from './assets/models/l-pendulum.meta.json' with { type:'json' }
 
 const pendulumAssetUrl = new URL('./assets/models/l-pendulum.glb',import.meta.url).href
 
 const props = defineProps({
+  sceneMode: { type:String, default:'bench' },
+  firmware: { type:String, default:'' },
   armAngle: { type:Number, default:0 },
   pendulumAngle: { type:Number, default:0 },
   mode: { type:String, default:'WAITING' },
@@ -53,29 +60,18 @@ const props = defineProps({
   leftWheelCount: { type:Number, default:0 },
   rightWheelCount: { type:Number, default:0 },
   steeringRequest: { type:Number, default:750 },
+  loaded: { type:Boolean, default:false }, // 人工选择的 3D 外观，不代表实际负载检测。
 })
 
 const host = ref(null)
 const calibrationOpen = ref(false)
 const modelError = ref('')
+const calibrationNotice = ref('')
+const calibrationProfile = ref(props.firmware)
+const canAlignDown = computed(() => Number.isFinite(props.pendulumAngle) && ['IDLE','ZERO','ARMED'].includes(props.mode))
 let destroyed = false
 function openCalibration(){ calibrationOpen.value = true }
 defineExpose({ openCalibration })
-// Angles are degrees at the telemetry boundary. Persisted values override these
-// defaults in this browser; copy the final hardware calibration here for deployment.
-const calibrationDefaults = Object.freeze({
-  thetaDirection: 1,
-  thetaOffsetDeg: 0,
-  alphaDirection: -1,
-  alphaOffsetDeg: 0,
-  // Display references supplied from the same physical setup, 2026-09-26.
-  // The hand-held upright sample is approximate; refine both in Calibration.
-  alphaTwoPointEnabled: true,
-  alphaUprightDeg: -.396,
-  alphaDownDeg: -169.937,
-  smoothing: 0.02, // Time constant in seconds, 0 disables interpolation; capped at 50 ms.
-})
-const calibrationStorageKey = 'j280:twin3d:calibration:v1'
 const calibration = reactive(loadCalibration())
 // Display-only sample conditioning, before calibration; never modifies telemetry.
 const displayTuning = Object.freeze({
@@ -88,8 +84,9 @@ const displayTuning = Object.freeze({
   fullSpeedDeg: 1,
 })
 const displayFloorY = -1
-let renderer, scene, camera, controls, base, armPivot, pendulumPivot, motorHalo, stabilityHalo, stabilityMaterial, resizeObserver
+let renderer, scene, camera, controls, base, armPivot, pendulumPivot, motorHalo, resizeObserver
 let environmentTarget
+let pendulumLoad
 let raf = 0
 let lastFrameTime = null
 let currentArm = 0
@@ -101,31 +98,31 @@ const pendulumSamples = createAngleSamples()
 let lastSampleTick = null
 const carWheels = []
 
-function finiteNumber(value, fallback){
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
-}
 function normalizedCalibration(value = {}){
-  return {
-    thetaDirection: [1, -1].includes(value.thetaDirection) ? value.thetaDirection : calibrationDefaults.thetaDirection,
-    thetaOffsetDeg: finiteNumber(value.thetaOffsetDeg, calibrationDefaults.thetaOffsetDeg),
-    alphaDirection: [1, -1].includes(value.alphaDirection) ? value.alphaDirection : calibrationDefaults.alphaDirection,
-    alphaOffsetDeg: finiteNumber(value.alphaOffsetDeg, calibrationDefaults.alphaOffsetDeg),
-    alphaTwoPointEnabled: typeof value.alphaTwoPointEnabled === 'boolean' ? value.alphaTwoPointEnabled : calibrationDefaults.alphaTwoPointEnabled,
-    alphaUprightDeg: finiteNumber(value.alphaUprightDeg, calibrationDefaults.alphaUprightDeg),
-    alphaDownDeg: finiteNumber(value.alphaDownDeg, calibrationDefaults.alphaDownDeg),
-    smoothing: THREE.MathUtils.clamp(finiteNumber(value.smoothing, calibrationDefaults.smoothing), 0, .05),
-  }
+  return normalizeDisplayCalibration(value, calibrationProfile.value)
 }
 function loadCalibration(){
   try {
-    return normalizedCalibration(JSON.parse(window.localStorage.getItem(calibrationStorageKey)) || {})
+    return normalizedCalibration(JSON.parse(window.localStorage.getItem(calibrationStorageKey(calibrationProfile.value))) || {})
   } catch {
-    return { ...calibrationDefaults }
+    return calibrationDefaults(calibrationProfile.value)
   }
 }
 function restoreCalibration(){
-  Object.assign(calibration, calibrationDefaults)
+  Object.assign(calibration, calibrationDefaults(calibrationProfile.value))
+  calibrationNotice.value = '已恢复当前固件的显示参考'
 }
+function alignDown(){
+  if(!canAlignDown.value)return
+  Object.assign(calibration,calibrateDownPose(normalizedCalibration(calibration),props.pendulumAngle))
+  calibrationNotice.value = `已按 ${props.pendulumAngle.toFixed(3)}° 对齐模型下垂；原始读数不变`
+}
+watch(()=>props.firmware, firmware=>{
+  if(!['SG21','SA21','SP24'].includes(firmware) || firmware===calibrationProfile.value)return
+  calibrationProfile.value=firmware
+  Object.assign(calibration,loadCalibration())
+  calibrationNotice.value=''
+})
 function normalizeCalibration(){
   // Commit validation on change, allowing intermediate input such as '-' or '0.'.
   Object.assign(calibration, normalizedCalibration(calibration))
@@ -160,9 +157,13 @@ watch(calibration, () => {
   const config = normalizedCalibration(calibration)
   mapPoseTargets()
   try {
-    window.localStorage.setItem(calibrationStorageKey, JSON.stringify(config))
+    window.localStorage.setItem(calibrationStorageKey(calibrationProfile.value), JSON.stringify(config))
   } catch { /* Rendering still works when browser storage is unavailable. */ }
 })
+watch(() => props.loaded, loaded => {
+  if (pendulumLoad) pendulumLoad.visible = loaded
+})
+watch(() => props.sceneMode, mode => { setSceneMode(base, mode); resize() })
 
 function createAngleSamples(){
   return { initialized:false, value:0, acceptedAt:0, candidate:null, candidateSince:0, confirmations:0 }
@@ -207,31 +208,14 @@ function acceptAngleSample(samples, value, velocity, sampleClock, initialize){
     samples.confirmations = 0
   }
 }
-function alphaReferencesValid(config){
-  if (!Number.isFinite(config.alphaUprightDeg) || !Number.isFinite(config.alphaDownDeg)) return false
-  const span = THREE.MathUtils.euclideanModulo(config.alphaDownDeg - config.alphaUprightDeg, 360)
-  // Prevent nearly coincident references from creating extreme angular gains.
-  return span >= 90 && span <= 270
-}
-function correctAlphaTelemetry(value, config){
-  if (!config.alphaTwoPointEnabled || !alphaReferencesValid(config)) return value
-  const down = THREE.MathUtils.euclideanModulo(config.alphaDownDeg - config.alphaUprightDeg, 360)
-  const phase = THREE.MathUtils.euclideanModulo(value - config.alphaUprightDeg, 360)
-  // Map the two measured arcs separately to two physical half-turns. A single
-  // gain of 180/169.541 would break continuity when raw telemetry wraps at +/-180.
-  const corrected = phase <= down ? 180 * phase / down
-    : 180 + 180 * (phase - down) / (360 - down)
-  return corrected > 180 ? corrected - 360 : corrected
-}
 function mapPoseTargets(){
   const config = normalizedCalibration(calibration)
   if (armSamples.initialized && Number.isFinite(calibration.thetaOffsetDeg)){
     targetArm = THREE.MathUtils.degToRad(config.thetaDirection * armSamples.value + config.thetaOffsetDeg)
   }
   if (pendulumSamples.initialized && Number.isFinite(calibration.alphaOffsetDeg)){
-    const alpha = config.alphaTwoPointEnabled && !alphaReferencesValid(calibration)
-      ? pendulumSamples.value : correctAlphaTelemetry(pendulumSamples.value, config)
-    targetPendulum = THREE.MathUtils.degToRad(config.alphaDirection * alpha + config.alphaOffsetDeg)
+    const mapping = config.alphaTwoPointEnabled && !alphaReferencesValid(calibration) ? {...config,alphaTwoPointEnabled:false} : config
+    targetPendulum = THREE.MathUtils.degToRad(displayAlphaDeg(pendulumSamples.value,mapping))
   }
 }
 
@@ -268,7 +252,7 @@ function addScrew(parent, x, z, y=.47){
 function initScene(){
   scene = new THREE.Scene()
   // Match the surrounding neutral surface so the mechanism stands on an open stage.
-  scene.background = new THREE.Color(0x242622)
+  // 透明背景让模型跨过标题底线，顶部文字和操作按钮由页面层显示。
 
   // Preserve the original 3/4 position/target; leave headroom for the upright rod.
   camera = new THREE.PerspectiveCamera(44, 1, .1, 100)
@@ -376,6 +360,7 @@ function initScene(){
   base = new THREE.Group()
   base.name = 'base'
   scene.add(base)
+  base.add(createBenchSupport())
 
   // Display chassis carries the original instrument without changing its axes,
   // hinge height, arm length, calibration, or incoming pendulum telemetry.
@@ -434,6 +419,8 @@ function initScene(){
     sensorFace.rotation.x = Math.PI / 2
   }
 
+  setSceneMode(base, props.sceneMode)
+
   // Square instrument base with mounting details.
   addBox(base, [2.05,.38,1.48], [0,.19,0], baseSteel)
   addBox(base, [1.76,.09,1.22], [0,.425,0], darkSteel)
@@ -489,10 +476,10 @@ function initScene(){
     try {
       mountPendulumModel(model,rodSteel)
       pendulumPivot.add(model)
-      const uprightEnd = new THREE.Vector3(...pendulumAssetMetadata.freeEndHoleCenterMeters)
-        .multiplyScalar(model.scale.x).add(model.position).add(pendulumPivot.position)
-      uprightEnd.y += .035
-      stabilityHalo.position.copy(uprightEnd)
+      pendulumLoad = createPendulumLoad(model, pendulumAssetMetadata)
+      pendulumLoad.visible = props.loaded
+      updatePendulumLoadPose(pendulumLoad, currentPendulum)
+      pendulumPivot.add(pendulumLoad)
     } catch (error) {
       disposePendulumModel(model)
       throw error
@@ -502,24 +489,6 @@ function initScene(){
     modelError.value = '摆杆模型加载失败，请刷新页面'
     console.error('STEP 摆杆资产加载失败',error)
   })
-
-  // Vertical target reference attached to the rotating hinge.
-  const guideGeometry = new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(2.23 + PENDULUM_DISPLAY.hingeOffset,.12,0),
-    new THREE.Vector3(2.23 + PENDULUM_DISPLAY.hingeOffset,2.42,0),
-  ])
-  const guide = new THREE.Line(
-    guideGeometry,
-    new THREE.LineDashedMaterial({ color:0x277f55, dashSize:.075, gapSize:.065, transparent:true, opacity:.16 })
-  )
-  guide.computeLineDistances()
-  armPivot.add(guide)
-
-  stabilityMaterial = new THREE.MeshBasicMaterial({ color:0x34d399, transparent:true, opacity:.35 })
-  stabilityHalo = new THREE.Mesh(new THREE.TorusGeometry(.23,.010,10,64), stabilityMaterial)
-  stabilityHalo.position.set(2.23,2.28,0)
-  stabilityHalo.rotation.x = Math.PI / 2
-  armPivot.add(stabilityHalo)
 
   resizeObserver = new ResizeObserver(resize)
   resizeObserver.observe(host.value)
@@ -542,8 +511,13 @@ function resize(){
   if (!renderer || !host.value) return
   const width = Math.max(10, host.value.clientWidth)
   const height = Math.max(10, host.value.clientHeight)
+  const stageWidth = Math.max(10, host.value.parentElement.clientWidth)
+  const stageHeight = Math.max(10, host.value.parentElement.clientHeight)
+  const leftOverflow = Math.max(0, -host.value.offsetLeft)
+  const topOverflow = Math.max(0, height - stageHeight)
   renderer.setSize(width, height, false)
-  camera.aspect = width / height
+  // 绘制范围向上、向两侧扩展；原场景的尺寸、中心和 OrbitControls 视角保持不变。
+  camera.setViewOffset(stageWidth, stageHeight, -leftOverflow, -topOverflow, width, height)
   camera.updateProjectionMatrix()
 }
 function angleDelta(a, b){
@@ -580,22 +554,13 @@ function animate(now){
   currentPendulum = angleLerp(currentPendulum, targetPendulum, alphaBlend)
   if (armPivot) armPivot.rotation.y = currentArm
   if (pendulumPivot) pendulumPivot.rotation.x = currentPendulum
-  // Illustrative wheel phase and three direction requests, not a wheel-distance
-  // or measured steering-angle calibration. The chassis stays at the origin.
-  for (const { wheel, steeringPivot, side, front } of carWheels) {
-    const count = side < 0 ? props.leftWheelCount : props.rightWheelCount
-    wheel.rotation.x = Number.isFinite(count) ? count * Math.PI * 2 / 960 : 0
-    steeringPivot.rotation.y = front ? ({ 700:.2, 750:0, 800:-.2 }[props.steeringRequest] ?? 0) : 0
-  }
+  if (pendulumLoad) updatePendulumLoadPose(pendulumLoad, currentPendulum)
+  // 轮计数、舵机比较值尚无机械标定；底盘保持示意，不从指令推算运动。
 
   const color = modeColor()
   if (motorHalo){
     motorHalo.material.color.setHex(color)
     motorHalo.material.opacity = .24
-  }
-  if (stabilityMaterial){
-    stabilityMaterial.color.setHex(color)
-    stabilityMaterial.opacity = props.mode === 'BALANCE' ? .24 : .14
   }
 
   controls.update()
@@ -627,10 +592,11 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .twin3d-tools{position:absolute;z-index:4;left:50%;bottom:9px;transform:translateX(-50%);display:flex;gap:8px}
-.twin3d-model-error{position:absolute;z-index:4;top:18px;left:50%;transform:translateX(-50%);margin:0;padding:8px 12px;color:#e4b97c;background:#30352b;border:1px solid #756141;border-radius:5px;font-size:12px}
+.twin3d-model-error{position:absolute;z-index:4;top:calc(var(--topbar-height) + 18px);left:50%;transform:translateX(-50%);margin:0;padding:8px 12px;color:#e4b97c;background:#30352b;border:1px solid #756141;border-radius:5px;font-size:12px}
+.twin3d-display-note{position:absolute;z-index:4;top:48px;right:14px;max-width:320px;margin:0;color:#c7d0b7;font-size:11px;line-height:1.6;pointer-events:none}
 .twin3d-tools button,.twin3d-calibration button{border:1px solid #636c52;border-radius:5px;background:#30352b;color:#c7d0b7;padding:6px 11px;font-size:11px;cursor:pointer}
 .twin3d-tools button:hover,.twin3d-calibration button:hover{border-color:#b9a171;color:#f1f2e9}
-.twin3d-calibration{position:absolute;z-index:5;right:14px;top:20px;width:min(276px,calc(100% - 28px));max-height:calc(100% - 40px);overflow:auto;box-sizing:border-box;padding:15px;border:1px solid #737c60;border-radius:8px;background:#30362a;color:#c4cdb5;box-shadow:0 4px 25px #0005;font-size:11px}
+.twin3d-calibration{position:absolute;z-index:5;right:14px;top:calc(var(--topbar-height) + 20px);width:min(276px,calc(100% - 28px));max-height:calc(100% - var(--topbar-height) - 40px);overflow:auto;box-sizing:border-box;padding:15px;border:1px solid #737c60;border-radius:8px;background:#30362a;color:#c4cdb5;box-shadow:0 4px 25px #0005;font-size:11px}
 .calibration-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
 .calibration-heading b{color:#e7eddb}.calibration-heading span{font-size:9px;color:#b0bc9c}
 .twin3d-calibration label{display:grid;grid-template-columns:1fr 90px;gap:10px;align-items:center;margin:8px 0}

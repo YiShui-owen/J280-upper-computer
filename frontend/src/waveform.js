@@ -59,7 +59,8 @@ export function createWaveformOption(samples, now, height = 500, events = [], wi
     id: channel.field,
     name: channel.name,
     type: 'line', xAxisIndex: index, yAxisIndex: index,
-    data: inWindow.map(({ sample, at }) => [at, Number.isFinite(sample[channel.field]) ? sample[channel.field] : null]),
+    data: inWindow.filter(({ sample }) => !Array.isArray(sample.channels) || sample.channels.includes(channel.field))
+      .map(({ sample, at }) => [at, Number.isFinite(sample[channel.field]) ? sample[channel.field] : null]),
     showSymbol: false, smooth: false, connectNulls: false, animation: false,
     lineStyle: { color: channel.color, width: 1.5 },
     itemStyle: { color: channel.color },

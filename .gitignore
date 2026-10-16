@@ -22,6 +22,8 @@ __pycache__/
 *.key
 *.log
 logs/
+host/**/sessions/
+host/**/reports/
 
 # Editor / operating system temporary files
 .history/
