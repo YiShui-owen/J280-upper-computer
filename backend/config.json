@@ -1,4 +1,4 @@
 {
   "bridge_port": 8371,
-  "firmware_variant": "SG21"
+  "firmware_variant": "auto"
 }

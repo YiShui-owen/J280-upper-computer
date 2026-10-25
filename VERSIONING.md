@@ -7,6 +7,18 @@
 
 远端仓库：https://github.com/YiShui-owen/J280-upper-computer
 
+### 2026-10-25：自动烧录前基线
+
+固定标签：`fd2-v1-v5-before-auto-programming-20261025`。此版包含 FD2 V1～V5 展示、原样 Host / CPython 运行时、120秒波形缓存及离线回放；自动烧录仍处于评估阶段，尚未加入程序。用户于当日要求将当前版提交并同步到 GitHub，作为后续自动化修改前的恢复点。
+
+需要找回这一版时，可以在另一个目录检出标签，保留当前工程：
+
+```powershell
+git clone --branch fd2-v1-v5-before-auto-programming-20261025 https://github.com/YiShui-owen/J280-upper-computer.git J280-before-auto-programming
+```
+
+源码、原样Host运行时及前端锁文件随Git保存；`.venv`、`node_modules` 等本机环境不保存到仓库。新目录首次运行按 `README_CN.md` 安装展示程序依赖。
+
 - `main`：当前项目，包含提亮后的 3D 场景。
 - `baseline-3d-readable` 标签：建立版本管理时的当前源码基线。
 - `archive/previous-zip` 分支和 `previous-zip-snapshot` 标签：从用户提供的 `上位机2.zip` 恢复的上一个版本，15 个原始源码/配置文件保持原内容，另外补了 .gitignore。

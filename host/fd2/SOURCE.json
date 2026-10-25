@@ -1,0 +1,12 @@
+{
+  "archive": "J280_V5_Standalone_20261025(1).zip",
+  "archive_sha256": "4815a9486373a068d20831889d789fe79afced1ecd533d2b8b6bafa3bacd3474",
+  "archive_bytes": 24611920,
+  "extracted_prefixes": [
+    "host/",
+    "runtime/"
+  ],
+  "file_count": 2250,
+  "files_manifest": "MANIFEST_SHA256.json",
+  "upstream_modified": false
+}

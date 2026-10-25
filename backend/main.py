@@ -15,7 +15,7 @@ from host_bridge import BridgeError, HostClient, TelemetryAdapter, empty_state, 
 from car_api import router as car_router, service as car_service
 
 CONFIG_PATH=Path(__file__).resolve().parent/'config.json'
-app=FastAPI(title='J280 SG21/SA21/SP24 Showcase',version='2.0.0')
+app=FastAPI(title='J280 V1–V5 Showcase',version='3.0.0')
 app.include_router(car_router)
 app.add_middleware(CORSMiddleware,allow_origins=['http://localhost:5173','http://127.0.0.1:5173'],
                    allow_credentials=True,allow_methods=['*'],allow_headers=['*'])
@@ -43,7 +43,7 @@ class Hub:
     def __init__(self):
         self.clients:set[WebSocket]=set()
         self.latest=empty_state()
-        self.samples:deque[dict]=deque(maxlen=6000)
+        self.samples:deque[dict]=deque(maxlen=64000)
         self.adapter=TelemetryAdapter()
         self.last_error='请启动配套 Host，并在 Host 中显式连接串口'
         self._task=None
@@ -57,14 +57,14 @@ class Hub:
         stream=self.wave_stream if endpoint==self.wave_endpoint else None
         result=None
         target=None
-        # The original Host retains at most 6000 rows. Bound the drain even if
-        # the live producer continues to advance while these requests run.
-        for _ in range(16):
+        # FD2 retains 64000 complete control/diagnostic rows. Stop at the first
+        # observed tail instead of chasing a continuously advancing producer.
+        for _ in range(128):
             page=await asyncio.to_thread(client.waveform,after=cursor,stream=stream)
             token=page.get('stream'); next_cursor=page.get('cursor'); tail=page.get('tail')
             if (not isinstance(token,str) or not token or type(next_cursor) is not int or
                     type(tail) is not int or not 0<=next_cursor<=tail or not isinstance(page.get('samples'),list)):
-                raise BridgeError('SP24 waveform 游标或样本格式无效')
+                raise BridgeError('Host waveform 游标或样本格式无效')
             changed=stream is not None and token!=stream
             page_rows=list(page['samples'])
             if page.get('overrun') and page_rows:
@@ -79,14 +79,14 @@ class Hub:
             if next_cursor>=target:
                 return result,endpoint
             if not page['samples'] or (not changed and cursor is not None and next_cursor<=cursor):
-                raise BridgeError('SP24 waveform 游标未推进，保留旧游标以便恢复')
+                raise BridgeError('Host waveform 游标未推进，保留旧游标以便恢复')
             cursor,stream=next_cursor,token
-        raise BridgeError('SP24 waveform 分页超过只读历史范围，保留旧游标')
+        raise BridgeError('Host waveform 分页超过只读历史范围，保留旧游标')
 
     async def broadcast(self,payload):
         message=json.dumps(payload,ensure_ascii=False,allow_nan=False)
         for ws in list(self.clients):
-            try: await asyncio.wait_for(ws.send_text(message),timeout=.3)
+            try: await asyncio.wait_for(ws.send_text(message),timeout=2)
             except Exception: self.clients.discard(ws)
 
     async def poll_once(self):
@@ -99,7 +99,7 @@ class Hub:
             if cfg!=load_config(): return  # Ignore an old endpoint after a settings change.
             variant=identify(snapshot,cfg['firmware_variant'])
             waveform=None
-            if variant=='SP24':
+            if variant=='SP24' or variant in ('V1','V2','V3','V4','V5'):
                 waveform,endpoint=await self.read_waveform(client,cfg)
                 if cfg!=load_config(): return
             data,rows,reset=self.adapter.observe(snapshot,time.time(),cfg['firmware_variant'],waveform=waveform)
@@ -117,7 +117,9 @@ class Hub:
         self.latest['observed_at']=time.time()
         self.latest['error']=self.last_error
         self.samples.extend(rows)
-        while self.samples and self.samples[0]['received_at']<time.time()-30: self.samples.popleft()
+        retention=120 if self.latest.get('firmware') in ('V1','V2','V3','V4','V5') else 30
+        if not (self.latest.get('replay') or {}).get('finished'):
+            while self.samples and self.samples[0]['received_at']<time.time()-retention: self.samples.popleft()
         await self.broadcast(dict(type='telemetry',data=self.latest,samples=rows,reset=reset))
 
     async def loop(self):
@@ -151,7 +153,7 @@ async def shutdown():
 
 
 @app.get('/')
-def root(): return dict(name='J280 Showcase Backend',version='2.0.0')
+def root(): return dict(name='J280 Showcase Backend',version='3.0.0')
 
 
 @app.get('/health')
@@ -217,6 +219,8 @@ async def command(body:Command):
         result=await asyncio.to_thread(client.command,payload)
         return {k:v for k,v in result.items() if k!='fingerprint'}
     except BridgeError as exc:
+        if getattr(exc,'request_rejected',False):
+            raise HTTPException(409,dict(request_id=body.request_id,state='rejected',message=str(exc))) from exc
         raise HTTPException(502,dict(request_id=body.request_id,state='indeterminate',
                                      message=str(exc)+'；结果未知，请保留 ID 查询，未重发')) from exc
 

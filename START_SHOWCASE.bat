@@ -7,7 +7,7 @@ if exist "%ROOT%.venv\Scripts\python.exe" set "SHOWCASE_PYTHON=%ROOT%.venv\Scrip
 echo ============================================================
 echo  J280 Showcase Upper Computer
 echo  Two layouts: pendulum bench / vehicle remote control.
-echo  Pendulum: run the matching SG21 / SA21 Host on port 8371.
+echo  Pendulum: run the matching V1-V5 Host on port 8371.
 echo  Vehicle BLE: search, select and connect explicitly in the page.
 echo ============================================================
 echo.

@@ -8,6 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from sp24_telemetry import PreciseTelemetryAdapter
+import fd2_telemetry
 
 
 class BridgeError(ValueError):
@@ -43,9 +44,15 @@ def integer(value, low, high):
 def identify(snapshot, expected='auto'):
     if not isinstance(snapshot,dict):
         raise BridgeError('Host 返回的数据不是对象')
-    variant=IDENTITIES.get((snapshot.get('user_code'),snapshot.get('schema')))
+    if snapshot.get('protocol') == 'FD2':
+        try:
+            variant=fd2_telemetry.identify(snapshot)
+        except ValueError as exc:
+            raise BridgeError(str(exc)) from exc
+    else:
+        variant=IDENTITIES.get((snapshot.get('user_code'),snapshot.get('schema')))
     if variant is None:
-        raise BridgeError('Host 固件身份或 schema 不受支持，仅支持 SG21 / SA21 / SP24')
+        raise BridgeError('Host 固件身份或 schema 不受支持，请使用匹配的 V1～V5 Host')
     if expected != 'auto' and variant != expected:
         raise BridgeError(f'预期 {expected}，当前 Host 为 {variant}')
     return variant
@@ -56,8 +63,8 @@ def validate_config(config):
         raise BridgeError('配置仅接受 bridge_port 和 firmware_variant')
     port=config.get('bridge_port',8371)
     variant=config.get('firmware_variant','auto')
-    if integer(port,1024,65535) is None or variant not in ('auto','SG21','SA21','SP24'):
-        raise BridgeError('本机桥端口须为 1024..65535，版本须为 auto / SG21 / SA21 / SP24')
+    if integer(port,1024,65535) is None or variant not in ('auto','V1','V2','V3','V4','V5','SG21','SA21','SP24'):
+        raise BridgeError('本机桥端口须为 1024..65535，版本须为 auto / V1～V5')
     return dict(bridge_port=port,firmware_variant=variant)
 
 
@@ -65,7 +72,12 @@ def validate_action(body,snapshot,expected='auto'):
     if not isinstance(body,dict) or set(body)-{'action','request_id','name','value'}:
         raise BridgeError('命令字段无效')
     action=body.get('action')
-    variant=identify(snapshot,'auto' if action=='stop' else expected)
+    variant=identify(snapshot,'auto' if action in ('stop','estop') else expected)
+    if snapshot.get('protocol') == 'FD2':
+        try:
+            return fd2_telemetry.validate_action(body,snapshot)
+        except ValueError as exc:
+            raise BridgeError(str(exc)) from exc
     if action not in ('stop','run','zero','clear-fault','balance','set','restore-pid','load-profile','apply-preset'):
         raise BridgeError('操作不受支持；串口连接请使用配套 Host')
     rid=body.get('request_id')
@@ -139,7 +151,9 @@ class HostClient:
                 detail=json.loads(exc.read(4096)).get('error',str(exc))
             except (ValueError,AttributeError): detail=str(exc)
             finally: exc.close()
-            raise BridgeError(f'Host 拒绝请求：{detail}') from exc
+            error = BridgeError(f'Host 拒绝请求：{detail}')
+            error.request_rejected = exc.code in (400, 403, 404, 409, 422)
+            raise error from exc
         except (OSError,ValueError) as exc:
             if isinstance(exc,BridgeError): raise
             raise BridgeError(f'配套 Host 无响应或返回无效数据：{exc}') from exc
@@ -160,12 +174,16 @@ def empty_state():
                 fpga_time_ms=None,arm_fpga_time_ms=None,mode=None,mode_name='WAITING',fault=None,
                 parameters={},parameter_specs=[],requests={},status={},gesture=None,gesture_event=None,gesture_runtime=None,
                 precision=None,arm_relative_deg=None,target_relative_deg=None,adaptive=None,adaptive_gains=None,
+                fd2=None,capabilities={},replay={},transport={},display_fresh=False,motion={},swing={},
+                arm_reference_deg=None,final_target_deg=None,action_reason=None,
                 **{name:None for name in OBSERVATIONS})
 
 
 class TelemetryAdapter:
     def __init__(self):
         self.precise=PreciseTelemetryAdapter()
+        self.fd2=fd2_telemetry.FD2TelemetryAdapter()
+        self.family=None
         self.source=None
         self.epoch=0
         self.pages={}
@@ -176,6 +194,7 @@ class TelemetryAdapter:
 
     def clear(self):
         self.precise.clear()
+        self.fd2.clear()
         self.epoch+=1
         self.pages.clear(); self.stamps.clear(); self.arrivals.clear()
         self.awaiting_epoch.clear()
@@ -186,9 +205,15 @@ class TelemetryAdapter:
         self.epoch+=1
         self.pages.clear(); self.arrivals.clear(); self.was_live=False
         self.precise.invalidate()
+        self.fd2.invalidate()
 
     def observe(self,snapshot,now,expected='auto',waveform=None):
         variant=identify(snapshot,expected)
+        family='FD2' if snapshot.get('protocol') == 'FD2' else 'legacy'
+        if self.family != family:
+            self.clear(); self.source=None; self.family=family
+        if family == 'FD2':
+            return self.fd2.observe(snapshot,now,waveform,empty_state())
         status=snapshot.get('status') if isinstance(snapshot.get('status'),dict) else {}
         age=snapshot.get('status_age_s')
         live=bool(snapshot.get('connected') and snapshot.get('synced') and status and number(age) and 0<=age<=1)

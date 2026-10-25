@@ -9,6 +9,11 @@ build/
 venv/
 __pycache__/
 *.py[cod]
+# Original FD2 portable runtime extensions are required dependencies.
+!host/fd2/upstream/**/*.pyd
+# The standard-library venv package is part of the supplied Python runtime.
+!host/fd2/upstream/runtime/Lib/venv/
+!host/fd2/upstream/runtime/Lib/venv/**
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -19,6 +24,9 @@ __pycache__/
 !.env.example
 !.env.sample
 *.pem
+# Public CA bundles shipped with the original runtime (not private keys).
+!host/fd2/upstream/**/cacert.pem
+!host/fd2/upstream/runtime/Lib/codex-rejected-cas.pem
 *.key
 *.log
 logs/

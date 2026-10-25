@@ -1,6 +1,6 @@
 <template>
   <div class="waveform-panel" @pointerenter="enterHistory" @pointermove="trackPointer" @pointerleave="leaveHistory">
-    <div ref="chartRef" class="waveform-chart" role="img" :aria-label="firmware === 'SP24' ? `最近${windowMs / 1000}秒摆角与参考、旋臂局部角与目标、实际PWM板端时间波形；局部原点计数${originCount || '未知'}` : `最近${windowMs / 1000}秒摆杆偏角、摆杆角速度与PWM波形`"></div>
+    <div ref="chartRef" class="waveform-chart" role="img" :aria-label="(firmware === 'SP24' || /^V[1-5]$/.test(firmware)) ? `最近${windowMs / 1000}秒摆角与参考、旋臂与参考及目标、实际PWM板端时间波形；局部原点计数${originCount || '未知'}` : `最近${windowMs / 1000}秒摆杆偏角、摆杆角速度与PWM波形`"></div>
     <div v-if="!hasData" class="waveform-empty" role="status">暂无数据</div>
   </div>
 </template>
@@ -9,6 +9,8 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as echarts from 'echarts'
 import { createWaveformOption, updateWaveformChart } from './waveform.js'
+import { createFd2WaveformOption } from './fd2Waveform.js'
+import { isFd2 } from './fd2Presentation.js'
 import { createPreciseWaveformOption } from './preciseWaveform.js'
 
 const props = defineProps({
@@ -34,7 +36,7 @@ function trackPointer(event) {
 }
 function enterHistory(event) {
   trackPointer(event)
-  setWindow(30000)
+  setWindow(isFd2(props.firmware) ? 120000 : 30000)
 }
 function leaveHistory() {
   pointer = null
@@ -53,11 +55,12 @@ function render() {
   frame = null
   if (!chart || !chartRef.value) return
   const precise = props.firmware === 'SP24'
+  const fd2 = isFd2(props.firmware)
   // Different firmware has a different series set. Clear once at a mode change,
   // then preserve tooltip/cursor models during normal live updates as before.
   if (preciseMode !== null && preciseMode !== precise) chart.clear()
   preciseMode = precise
-  const createOption = precise ? createPreciseWaveformOption : createWaveformOption
+  const createOption = fd2 ? createFd2WaveformOption : precise ? createPreciseWaveformOption : createWaveformOption
   const option = createOption(props.samples, props.now, chart.getHeight(), props.events, chart.getWidth(), windowMs.value, props.layout)
   const originCount = props.originCount
   if (precise && /^-?\d+$/.test(originCount)) {

@@ -8,16 +8,16 @@
       </nav>
       <div class="system-tools">
         <button class="text-button" @click="openSettings">参数与连接</button>
-        <button class="button primary hardware-run" :disabled="!hostControls?.canRun" @click="hostControls?.run()">RUN 自动起摆</button>
-        <button v-if="sceneMode === 'car'" class="button stop" :disabled="!carControl.status.connected" @click="carControl.stop()">停止小车</button>
-        <button class="button stop hardware-stop" @click="hostControls?.stop()">停止摆控</button>
+        <button class="button primary hardware-run" :disabled="!hostControls?.canRun" @click="hostControls?.run()">{{ hostControls?.runLabel || '启动摆控' }}</button>
+        <button v-if="sceneMode === 'car'" class="button stop" :disabled="state.replay?.active || !carControl.status.connected" @click="carControl.stop()">停止小车</button>
+        <button class="button stop hardware-stop" :disabled="state.replay?.active" @click="hostControls?.stop()">停止摆控</button>
       </div>
     </header>
     <section class="console-statusbar" aria-label="独立连接状态与模型工况">
       <div class="link-states">
-          <span :class="{live:statusOnline}"><i></i>倒立摆：{{ statusOnline ? `${state.firmware} 已连接` : state.host_online ? '等待状态读回' : '未连接' }}</span>
+          <span :class="{live:statusOnline}"><i></i>倒立摆：{{ state.replay?.active ? `离线回放 ${state.firmware || ''}${state.replay.finished ? ' · 已结束' : ''}` : statusOnline ? `${state.firmware} 已连接` : state.host_online ? '等待状态读回' : '未连接' }}</span>
           <span v-if="state.firmware === 'SP24' && !precisionFresh" class="precision-stale">精确遥测{{ state.precision?.available === false ? '接口未就绪' : '陈旧／等待' }}</span>
-        <span v-if="hostControls?.runRequest" class="run-request-status" role="status">起摆：{{ requestLabel(hostControls.runRequest) }}</span>
+        <span v-if="hostControls?.runRequest" class="run-request-status" role="status">{{ ['V3','V5'].includes(state.firmware) ? '平衡请求' : '起摆请求' }}：{{ requestLabel(hostControls.runRequest) }}</span>
         <template v-if="sceneMode === 'car'">
           <span :class="{live:carControl.status.connected && carControl.apiOnline}"><i></i>遥控链路：{{ carControl.apiOnline && carControl.status.connected ? 'BLE 已验证' : '未连接' }}</span>
           <span :class="{live:!!carControl.feedback}"><i></i>车辆反馈：{{ carControl.feedback ? '已收到' : '暂无' }}</span>
@@ -41,7 +41,7 @@
           </div>
         </dl>
         <div v-else class="data-empty"><strong>{{ state.received_at ? '遥测中断' : '等待连接' }}</strong><button class="text-button" @click="openSettings">连接倒立摆</button></div>
-        <button class="button compact" @click="openSettings">PID 与起摆参数</button>
+        <button class="button compact" @click="openSettings">摆控操作与连接</button>
       </aside>
       <section class="model-panel" :aria-label="sceneMode === 'bench' ? '固定台架与摆杆模型' : '车载摆杆辅助模型'">
         <div class="model-stage">
@@ -49,10 +49,10 @@
           ref="digitalTwin"
           :scene-mode="sceneMode"
           :firmware="state.firmware || ''"
-          :arm-angle="null"
+          :arm-angle="angleOnline ? periodicArm(state.arm_angle_deg) : null"
           :pendulum-angle="angleOnline ? state.angle_deg : null"
           :mode="statusOnline ? state.mode_name : 'WAITING'"
-          :sample-time="state.angle_received_at"
+          :sample-time="state.angle_received_at || state.observed_at"
           :sample-tick="state.fpga_time_ms ?? null"
           :arm-velocity="state.arm_velocity_deg_s"
           :pendulum-velocity="state.angle_velocity_deg_s"
@@ -64,12 +64,12 @@
           <div v-for="metric in visibleMetrics" :key="metric.key"><dt>{{ metric.label }}</dt><dd>{{ metric.value }} {{ metric.unit }}</dd></div>
         </dl>
       </section>
-      <GesturePanel v-if="sceneMode === 'bench'" :state="hostState" :busy="hostControls?.busy" :command="hostControls?.gestureRequest" @toggle="hostControls?.setGesture($event)" @stop="hostControls?.stop()" />
+      <Fd2FeaturePanel v-if="sceneMode === 'bench'" :state="hostState" :samples="chartSamples" :now="chartNow" />
       <aside v-else class="remote-panel" aria-label="车载遥控操作区">
         <header class="panel-heading"><h2>小车遥控</h2><span :class="['small-status',{live:carControl.enabled}]">{{ carControl.enabled ? '已启用' : '未启用' }}</span></header>
-        <CarControlPanel :control="carControl" />
-        <div class="remote-enable"><button class="button primary" :disabled="!carControl.canEnable || carControl.enabled" @click="enableRemote">{{ carControl.enabled ? '遥控已启用' : '启用遥控' }}</button></div>
-        <CarControlPad :enabled="carControl.enabled" :connected="carControl.status.connected" :held="carControl.held" @press="carControl.press" @release="carControl.release" @stop="carControl.stop()" />
+        <fieldset :disabled="state.replay?.active" class="car-replay-guard"><CarControlPanel :control="carControl" /></fieldset>
+        <div class="remote-enable"><button class="button primary" :disabled="state.replay?.active || !carControl.canEnable || carControl.enabled" @click="enableRemote">{{ carControl.enabled ? '遥控已启用' : '启用遥控' }}</button></div>
+        <CarControlPad :enabled="carControl.enabled && !state.replay?.active" :connected="carControl.status.connected && !state.replay?.active" :held="carControl.held" @press="carControl.press" @release="carControl.release" @stop="carControl.stop()" />
         <p class="remote-sequence">按住行驶，松开停止</p>
         <p v-if="carControl.notice" class="remote-notice" role="status">{{ carControl.notice }}</p>
         <p v-if="carControl.apiError || carControl.error || carControl.status.error" class="host-error" role="alert">{{ carControl.apiError || carControl.error || carControl.status.error }}</p>
@@ -85,19 +85,19 @@
         <details class="operator-help car-help"><summary>操作说明</summary><div class="help-content"><p>先向左／向右打方向，再前进／后退。前轮舵机负责转向。</p><p><kbd>W</kbd> <kbd>↑</kbd> 前进　<kbd>S</kbd> <kbd>↓</kbd> 后退<br /><kbd>A</kbd> <kbd>←</kbd> 左转　<kbd>D</kbd> <kbd>→</kbd> 右转</p><p><kbd>空格</kbd> / <kbd>Esc</kbd> 停止并回正。切换场景、打开设置或离开窗口会取消遥控。</p><p>BLE 蓝牙：WH-BLE102。连接后需手动启用遥控；连接和车辆反馈分别判断。</p></div></details>
       </aside>
     </section>
-    <section v-if="online" class="waveform-section console-waveforms" aria-label="摆控实时响应">
-      <header class="waveform-heading"><h2>摆控波形</h2><div class="waveform-tools"><details v-if="state.firmware === 'SP24'" class="precision-details"><summary>{{ fmt(state.precision?.received_hz,1) }} Hz<span v-if="state.precision?.recording_error || state.precision?.recording_lost_rows" class="precision-alert">记录异常</span></summary><div class="precision-summary"><p>{{ precisionSummary }}</p><p>记录错误：{{ state.precision?.recording_error || '无' }}；未记录 {{ state.precision?.recording_lost_rows ?? '--' }} 行</p></div></details><span title="悬停查看 30 秒，移开恢复 10 秒">{{ waveformWindowMs / 1000 }} 秒</span></div></header>
+    <section v-if="online || chartSamples.length" class="waveform-section console-waveforms" aria-label="摆控实时响应">
+      <header class="waveform-heading"><h2>摆控波形</h2><div class="waveform-tools"><details v-if="state.firmware === 'SP24'" class="precision-details"><summary>{{ fmt(state.precision?.received_hz,1) }} Hz<span v-if="state.precision?.recording_error || state.precision?.recording_lost_rows" class="precision-alert">记录异常</span></summary><div class="precision-summary"><p>{{ precisionSummary }}</p><p>记录错误：{{ state.precision?.recording_error || '无' }}；未记录 {{ state.precision?.recording_lost_rows ?? '--' }} 行</p></div></details><button class="text-button" @click="exportSamples">导出当前缓存</button><span title="悬停查看 120 秒，移开恢复 10 秒">{{ waveformWindowMs / 1000 }} 秒</span></div></header>
       <WaveformPanel layout="horizontal" :firmware="state.firmware || ''" :origin-count="state.precision?.origin_count || ''" :samples="chartSamples" :now="chartNow" :events="events" @window-change="waveformWindowMs = $event" />
     </section>
 
     <dialog ref="settingsDialog" class="engineering-dialog" @click="closeOnBackdrop">
       <header class="dialog-heading"><h2>设置</h2><button class="icon-button" aria-label="关闭设置" @click="settingsDialog.close()">×</button></header>
-      <HostControlPanel ref="hostControls" :state="hostState" @event="recordEvent" />
-      <details class="operator-help"><summary>模型与数据说明</summary><div class="help-content"><p>空载／有负载只切换模型显示，不表示检测到实物负载，也不修改控制参数。</p><p>摆角随有效遥测更新；旋臂绝对角未标定，旋臂和车载底盘保持示意。没有对应实时数据时不生成运动或波形。</p></div></details>
+      <Fd2ControlPanel ref="hostControls" :state="hostState" @event="recordEvent" />
+      <details class="operator-help"><summary>模型与数据说明</summary><div class="help-content"><p>空载／有负载只切换模型显示，不表示检测到实物负载，也不修改控制参数。</p><p>摆角随有效遥测更新；旋臂按有效累计角的周期内姿态显示，车载底盘保持示意。没有对应实时数据时不生成运动或波形。</p></div></details>
       <div class="engineering-row"><span>机械姿态映射</span><button class="button compact" @click="openCalibration">姿态标定</button></div>
       <dl class="engineering-readouts">
         <div><dt>编码器</dt><dd>{{ state.encoder ?? '--' }}</dd></div>
-        <div><dt>旋臂绝对角</dt><dd>固件未提供</dd></div>
+        <div><dt>旋臂累计角</dt><dd>{{ angleOnline ? fmt(state.arm_angle_deg) : '--' }} °（累计角）</dd></div>
         <div><dt>故障码</dt><dd :class="{ 'fault-text':state.fault }">{{ state.fault == null ? '--' : `0x${hex2(state.fault)}` }}</dd></div>
         <div><dt>旋臂角速度</dt><dd>{{ fmt(state.arm_velocity_deg_s, 1) }} °/s</dd></div>
       </dl>
@@ -111,7 +111,9 @@ import DigitalTwin3D from './DigitalTwin3D.vue'
 import WaveformPanel from './WaveformPanel.vue'
 import CarControlPanel from './CarControlPanel.vue'
 import CarControlPad from './CarControlPad.vue'
-import HostControlPanel from './HostControlPanel.vue'
+import Fd2ControlPanel from './Fd2ControlPanel.vue'
+import Fd2FeaturePanel from './Fd2FeaturePanel.vue'
+import { isFd2, appendFd2Samples, periodicArm, fd2Freshness, replayCacheNow, fd2RmsAngle } from './fd2Presentation.js'
 import GesturePanel from './GesturePanel.vue'
 import { useCarControl } from './useCarControl.js'
 import { pageFresh } from './gesturePresentation.js'
@@ -121,7 +123,7 @@ const carControl = useCarControl()
 
 const API = 'http://127.0.0.1:8000'
 const WS = 'ws://127.0.0.1:8000/ws'
-const HISTORY_MS = 30000
+const HISTORY_MS = 120000
 
 const state = reactive({
   mode_name:'WAITING',angle_deg:null,angle_velocity_deg_s:null,encoder:null,arm_angle_deg:null,
@@ -130,7 +132,7 @@ const state = reactive({
   parameters:{},parameter_specs:[],requests:{},status:{},
 })
 const hostControls=ref(null)
-const samples = ref([])
+const samples = shallowRef([])
 const chartSamples = shallowRef([])
 const chartNow = ref(Date.now())
 const waveformWindowMs = ref(10000)
@@ -146,20 +148,21 @@ let chartRenderTimer = null
 let reconnectTimer = null
 let destroyed = false
 
-const statusOnline=computed(()=>state.status_fresh && clock.value/1000-Number(state.observed_at)<2)
-const hostState=computed(()=>({...state,status_fresh:statusOnline.value,presentation_now_ms:clock.value}))
+const statusOnline=computed(()=>isFd2(state.firmware)?fd2Freshness(state,clock.value).status:state.status_fresh && clock.value/1000-Number(state.observed_at)<2)
+const hostState=computed(()=>({...state,status_fresh:statusOnline.value,display_fresh:isFd2(state.firmware)?fd2Fresh.value:state.display_fresh,presentation_now_ms:clock.value}))
 const precisionFresh=computed(()=>state.firmware !== 'SP24' || Boolean(state.precision && state.precision.available !== false && !state.precision.stale &&
   Number.isFinite(state.precision.age_s) && state.precision.age_s + Math.max(0,clock.value/1000-Number(state.observed_at)) < .25))
-const angleOnline = computed(() => precisionFresh.value && pageFresh(state.angle_received_at, clock.value, statusOnline.value))
-const pwmOnline = computed(() => precisionFresh.value && pageFresh(state.arm_received_at, clock.value, statusOnline.value))
+const fd2Fresh = computed(() => fd2Freshness(state,clock.value).control)
+const angleOnline = computed(() => isFd2(state.firmware) ? fd2Fresh.value : precisionFresh.value && pageFresh(state.angle_received_at, clock.value, statusOnline.value))
+const pwmOnline = computed(() => isFd2(state.firmware) ? fd2Fresh.value : precisionFresh.value && pageFresh(state.arm_received_at, clock.value, statusOnline.value))
 const precisionSummary=computed(()=>{
   const p=state.precision || {}
   return `${fmt(p.received_hz,1)} Hz · 缺帧 ${p.missing ?? '--'} · CRC ${p.crc_errors ?? '--'} · 接收龄 ${fmt(p.age_s*1000,0)} ms · PID 龄 ${fmt(p.epoch_age_ms,0)} ms · 待记 ${p.recording_backlog ?? '--'}${p.bridge_overrun ? ' · 桥缓存缺口' : ''}`
 })
 const online = computed(() => angleOnline.value || pwmOnline.value)
 const modeClass = computed(() => !statusOnline.value ? 'idle' : ({ BALANCE:'balance', SWING:'swing', FAULT:'fault', ZERO:'zero' }[state.mode_name] || 'idle'))
-const modeLabel = computed(() => !statusOnline.value ? '无新状态' : ({ BALANCE:'平衡', SWING:'起摆', FAULT:'故障', ZERO:'已抓零', ARMED:'就绪', IDLE:'待机' }[state.mode_name] || '待机'))
-const rmsAngle = computed(() => calculateRms(samples.value,Math.max(clock.value,Date.now())))
+const modeLabel = computed(() => state.replay?.active ? `回放 · ${state.mode_name || '等待'}` : !statusOnline.value ? '无新状态' : ({ BALANCE:'平衡', SWING:'起摆', FAULT:'故障', ZERO:'已抓零', ARMED:'就绪', IDLE:'待机' }[state.mode_name] || '待机'))
+const rmsAngle = computed(() => isFd2(state.firmware) ? fd2RmsAngle(samples.value,chartNow.value) : calculateRms(samples.value,Math.max(clock.value,Date.now())))
 // Field definitions keep the presentation independent of a particular mechanism.
 const metrics = computed(() => [
   { key:'angle', label:'摆杆偏角', symbol:'α', value:fmt(state.angle_deg, 3), unit:'°', tone:'cyan',visible:angleOnline.value && Number.isFinite(state.angle_deg) },
@@ -175,6 +178,7 @@ function fmtSigned(v, digits = 1){
   const n = Number(v)
   return `${n > 0 ? '+' : ''}${n.toFixed(digits)}`
 }
+function exportSamples(){const blob=new Blob([JSON.stringify({firmware:state.firmware,replay:state.replay,samples:chartSamples.value},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='fd2-displayed-cache.json';a.click();URL.revokeObjectURL(url)}
 function hex2(v){ return Number(v || 0).toString(16).toUpperCase().padStart(2, '0') }
 function changeScene(mode){
   if(sceneMode.value===mode)return
@@ -182,7 +186,7 @@ function changeScene(mode){
   sceneMode.value=mode
 }
 function openSettings(){void carControl.deactivate('参数设置已打开');settingsDialog.value.showModal()}
-async function enableRemote(){await carControl.enable();if(document.activeElement instanceof HTMLElement)document.activeElement.blur()}
+async function enableRemote(){if(state.replay?.active)return;await carControl.enable();if(document.activeElement instanceof HTMLElement)document.activeElement.blur()}
 function closeOnBackdrop(event){ if (event.target === settingsDialog.value) settingsDialog.value.close() }
 function openCalibration(){
   settingsDialog.value.close()
@@ -194,15 +198,26 @@ function recordEvent(label, at = Date.now()){
   scheduleCharts()
 }
 
+let chartDataDirty = false
 function scheduleCharts(){
+  // A frozen replay has no moving time domain. Status polls must not repaint its history.
+  if (state.replay?.active && !chartDataDirty && chartSamples.value.length) return
   if (chartRenderTimer) return
   chartRenderTimer = setTimeout(() => {
     chartRenderTimer = null
-    const now = Date.now()
-    samples.value = samples.value.filter(sample => Number(sample.received_at) * 1000 >= now - HISTORY_MS)
-    chartSamples.value = samples.value.slice()
+    const now = state.replay?.active && samples.value.length
+      ? Math.max(...samples.value.map(row => (row.plot_at ?? row.received_at) * 1000)) : Date.now()
+    const cacheNow = replayCacheNow(state, samples.value, now)
+    const retained = samples.value.filter(sample => sample.received_at * 1000 >= cacheNow - HISTORY_MS)
+    const changed = chartDataDirty || retained.length !== samples.value.length
+    if (changed) {
+      samples.value = retained
+      chartSamples.value = retained
+    }
+    chartDataDirty = false
     chartNow.value = now
-    events.value = events.value.filter(event => event.at >= now - HISTORY_MS)
+    const retainedEvents = events.value.filter(event => event.at >= now - HISTORY_MS)
+    if (retainedEvents.length !== events.value.length) events.value = retainedEvents
   }, state.firmware === 'SP24' ? 33 : 70)
 }
 function applyTelemetry(data, rows = [], reset = false){
@@ -211,7 +226,10 @@ function applyTelemetry(data, rows = [], reset = false){
   Object.assign(state, data)
   // 遥测可早于下一次 500 ms 定时刷新到达，必须同步推进新鲜度判断的本机时钟。
   clock.value = Date.now()
-  samples.value=appendSamples(samples.value,rows,Date.now(),reset)
+  if (data.replay?.active && carControl.enabled) void carControl.deactivate('离线回放禁用遥控')
+  const previousSamples = samples.value
+  samples.value=isFd2(data.firmware)?appendFd2Samples(samples.value,rows,replayCacheNow(state,[...(reset?[]:samples.value),...rows]),reset):appendSamples(samples.value,rows,Date.now(),reset)
+  if (reset || samples.value.length !== previousSamples.length || samples.value.some((row,i)=>row!==previousSamples[i])) chartDataDirty = true
   if(reset)events.value=[]
   scheduleCharts()
 }

@@ -458,3 +458,5 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px 
   .model-panel { min-height:330px; }
   .console-waveforms,.car .console-waveforms { height:260px; }
 }
+
+.car-replay-guard{border:0;margin:0;padding:0;min-width:0}

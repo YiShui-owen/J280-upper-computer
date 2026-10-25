@@ -1,28 +1,33 @@
 # 项目协作规则
 
-这是 J280 旋转倒立摆展示上位机，支持 2026-10-15 的 SG21 / SA21 / SP24 交付。链路为 `FPGA → UART → 配套 Host（唯一串口所有者）→ 本机 HTTP → FastAPI → WebSocket → Vue`。旧 V5.12 日志/mailbox 链路已替换，不按历史文档恢复旧协议。
+这是 J280 旋转倒立摆展示上位机，日常支持 2026-10-25 的 FD2 V1～V5 交付。SG21 / SA21 / SP24 仅保留来源与历史适配，不再列为日常启动或网页版本选项。链路为 `FPGA → UART → 配套 Host（唯一串口所有者）→ 本机 HTTP → FastAPI → WebSocket → Vue`。旧 V5.12 日志/mailbox 链路已替换，不按历史文档恢复旧协议。
 
 技术栈为 Python/FastAPI/uvicorn、Vue/Vite、ECharts、Three.js。依赖以 `backend/requirements.txt`、前端 package/锁文件为准。
 
 |文件|职责|
 |---|---|
 |`backend/host_bridge.py`|固定 loopback HTTP 客户端、身份/命令检查、分页遥测转换与去重|
+|`backend/fd2_telemetry.py`、`host/fd2_bridge.py`、`host/fd2_replay.py`|FD2 五版身份、coherent T 和独立 D 游标、一次性命令及原生日志 RX-only 回放|
+|`host/fd2/upstream`|V5 包中的原样通用 Host 与 CPython 3.12；来源及逐文件哈希在 `host/fd2`|
 |`backend/sp24_telemetry.py`、`host/sp24_bridge.py`|SP24原Host外层只读游标历史、精确帧时间/原点/有效性适配；不改控制|
-|`backend/main.py`|Host 轮询、30 秒历史、WebSocket、`/snapshot`、`/health`、`/config`、`/command`、`/requests/{id}`、模板下载|
+|`backend/main.py`|Host 分页排空、FD2 120 秒历史（历史版30秒）、WebSocket、`/snapshot`、`/health`、`/config`、`/command`、`/requests/{id}`|
 |`backend/config.json`|本机桥端口与预期固件版本，默认 8371 / auto|
 |`host/gesture/host`、`host/adaptive/host`|用户交付的原样 Host、测试、指南、模板；来源与清单见 `host/README.md` 和 `MANIFEST_SHA256.json`|
 |`host/sp24/gesture/host`、`host/sp24/presets`|SP24原样运行依赖、参数预设及来源哈希；launcher precise安装只读桥|
 |`frontend/src/HostControlPanel.vue`、`hostPresentation.js`|摆控设置、PID/起摆/手势/SA21 配置、操作状态、样本缓存与 RMS|
-|`frontend/src/App.vue`、`GesturePanel.vue`|无车实验台/车载遥控台、真实摆控数据、30 秒缓存、主页面手势|
+|`frontend/src/App.vue`、`Fd2ControlPanel.vue`、`Fd2FeaturePanel.vue`、`fd2Presentation.js`|双场景、V1～V5 显式操作、手势/自适应/运动状态、120秒缓存与回放禁控|
 |`DigitalTwin3D.vue`、`pendulumModel.js`、`pendulumLoad.js`、`pendulumCalibration.js`|用户 STEP 模型、按固件保存的显示标定/下垂对齐、显示插值及可切换挂载；原件见 `frontend/model-sources`|
 |`WaveformPanel.vue`、`waveform.js`|按页分通道的真实波形，10 秒窗口，悬停 30 秒|
 |`preciseWaveform.js`|SP24摆角/ref、旋臂局部角/目标、PWM；板端轴、缺帧断线、保峰抽点|
+|`fd2Waveform.js`|FD2摆角/参考、累计旋臂/参考/独立最终目标、实际PWM；板时、120秒窗口、保峰抽点|
 |`CarControlPanel.vue`、`CarControlPad.vue`、`useCarControl.js`、`carInput.js`|显式 BLE 连接、按住遥控、键盘与输入取消；不调用旧模拟源码|
 |`backend/car_service.py`、`car_api.py`、`car/`|原样交付 BLE 依赖、独占线程、输入租约、会话/序号、独立 `/car` HTTP 接口|
 
 ## 工作方式
 
-版本约定（用户于2026-10-16明确）：日常使用始终以用户最新交付为准。后续适配将最新交付作为唯一日常启动和页面入口；历史版本仅在仓库中备份供追溯，不再默认保留多版本并列选择。当前这次已完成的SG21／SA21／SP24并列实现按用户要求暂时保持，不因记录此约定立即清理或修改功能；下次版本适配时遵循本约定。记录约定本身不代表授权自动提交或推送仓库。
+版本约定（用户于2026-10-16明确）：日常使用始终以用户最新交付为准。最新交付作为唯一日常启动和页面入口；历史版本仅在仓库中备份供追溯。2026-10-25 已将日常入口切换为 FD2 V1～V5。记录约定本身不代表授权自动提交或推送仓库。
+
+自动烧录评估（2026-10-25）：用户选择 SRAM 临时下载，断电不保留；提供的本机 Programmer 目录为 `C:\Gowin\Gowin_V1.9.12.03_x64\Programmer\bin`，已只读确认存在 `programmer_cli.exe`。后续实现需支持不同电脑的路径发现/本机配置，不能写死该绝对路径。目前仅评估，尚未授权实施自动烧录或进行硬件下载。用户已明确要求先将现有版本同步到 GitHub，固定恢复标签见 `VERSIONING.md`。
 
 界面基准（用户于2026-10-16确认）：当前 UI 设计已通过，见 `DESIGN.md` 第10节及 `docs/design/2026-10-16/` 的离线参考图。后续沿用石墨灰、银色模型、少量琥珀色操作、桌面模型向上和左右跨列绘制、手势区等线字体及统一字阶；不默认恢复文字黑色衬底、模糊阴影或堆叠小字说明。除用户进一步要求，不主动重排已通过的布局。
 
@@ -32,6 +37,12 @@
 
 ## 通信与数据保护
 
+- FD2 V1～V5 完整 firmware/schema/wire 身份见 `host/fd2/README.md`，三者共同核验。V3 自适应是角 P/D；V5 已移除自动起摆，网页不得恢复该动作。V4/V5 定位是旋臂相对定位，不是车辆位移。
+- FD2 T 为200Hz完整控制事务，D为独立诊断；不得用状态快照或网络轮询替代原始批量采样。板时用于绘图，接收时刻用于链路龄；宽计数以十进制字符串保留。摆角为 `(ADC12-3085)*345/4096`，旋臂为 `count*360/1040`，PWM 为实际 Q15。累计角不等于机械零点。
+- FD2 状态、控制和诊断各自500ms失效；V3均值采用上游1秒/5秒时间加权统计并显示覆盖率。手势识别、全局最近动作原因、ACK、规划完成、跟踪到位分别展示，不相互推断。
+- FD2 上游源码及运行时原字节保存；外层锁不跨原接收/命令回调，ACK匹配真实wire ID及opcode，会话切换后旧请求不补发。回放只读 `ForestFive.Physical.v1` ZIP 的RX，绝不启动设备线程或执行历史TX；始终标记离线、禁止摆控及小车硬件操作，结束冻结历史。
+- 网页120秒环形缓存及绘图抽点不能替代原Host完整会话日志。USB为高频遥测，BT10为摆控命令/ACK，小车WH-BLE102是独立链路。
+- 以下 SG21 / SA21 / SP24 专用规则适用于历史适配，不得套用到 FD2：
 - SG21 身份对为 `53473231 / 53475421`，SA21 为 `53413231 / 53415421`，SP24 为 `53503234 / 53505424`；验证完整身份，普通写操作匹配预期版本。STOP 可发送给已识别的另一受支持 Host。
 - COM 始终由对应 Host 管理；网页不自动连接串口、恢复参数、导入配置、起摆或切换自适应。不得擅自运行烧录、抓零、运动或参数命令来测试。
 - 网页命令仅显式转发一次，保留 request_id；HTTP 200、accepted、ACK 不等于动作完成。超时为结果未知，不重发，使用查询恢复结果。
@@ -48,7 +59,7 @@
 
 ## 启动与验证
 
-使用摆控时先运行 `START_HOST.bat` 选择已烧录版本，在 Host 中明确连接串口；再运行 `START_SHOWCASE.bat`。仅查看界面或小车遥控可不启动摆控 Host。网页设置可修改本机桥端口/预期版本。FastAPI 为 `127.0.0.1:8000`，Vue 为 `localhost:5173`，CORS/WS/端口须对应；小车 BLE 在车载页另行显式搜索、选择、连接和启用。
+使用摆控时先运行 `START_HOST.bat` 选择已烧录的 V1～V5，使用随包 CPython 3.12，在 Host 中明确连接串口；再运行 `START_SHOWCASE.bat`。仅查看界面或小车遥控可不启动摆控 Host。离线预览与原日志回放命令见 `README_CN.md`，不得以实物连接验证替代离线检查。网页设置可修改本机桥端口/预期版本。FastAPI 为 `127.0.0.1:8000`，Vue 为 `localhost:5173`，CORS/WS/端口须对应；小车 BLE 在车载页另行显式搜索、选择、连接和启用。
 
 修改后执行相关检查：
 
