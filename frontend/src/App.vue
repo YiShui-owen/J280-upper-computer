@@ -16,6 +16,7 @@
     <section class="console-statusbar" aria-label="独立连接状态与模型工况">
       <div class="link-states">
           <span :class="{live:statusOnline}"><i></i>倒立摆：{{ state.replay?.active ? `离线回放 ${state.firmware || ''}${state.replay.finished ? ' · 已结束' : ''}` : statusOnline ? `${state.firmware} 已连接` : state.host_online ? '等待状态读回' : '未连接' }}</span>
+          <span v-if="programmingBusy" role="status">{{ firmwareStatus.job?.target || state.programming?.target || '' }} · {{ firmwarePhaseLabel(firmwareStatus.phase === 'idle' ? state.programming?.phase : firmwareStatus.phase) }}</span>
           <span v-if="state.firmware === 'SP24' && !precisionFresh" class="precision-stale">精确遥测{{ state.precision?.available === false ? '接口未就绪' : '陈旧／等待' }}</span>
         <span v-if="hostControls?.runRequest" class="run-request-status" role="status">{{ ['V3','V5'].includes(state.firmware) ? '平衡请求' : '起摆请求' }}：{{ requestLabel(hostControls.runRequest) }}</span>
         <template v-if="sceneMode === 'car'">
@@ -67,9 +68,9 @@
       <Fd2FeaturePanel v-if="sceneMode === 'bench'" :state="hostState" :samples="chartSamples" :now="chartNow" />
       <aside v-else class="remote-panel" aria-label="车载遥控操作区">
         <header class="panel-heading"><h2>小车遥控</h2><span :class="['small-status',{live:carControl.enabled}]">{{ carControl.enabled ? '已启用' : '未启用' }}</span></header>
-        <fieldset :disabled="state.replay?.active" class="car-replay-guard"><CarControlPanel :control="carControl" /></fieldset>
-        <div class="remote-enable"><button class="button primary" :disabled="state.replay?.active || !carControl.canEnable || carControl.enabled" @click="enableRemote">{{ carControl.enabled ? '遥控已启用' : '启用遥控' }}</button></div>
-        <CarControlPad :enabled="carControl.enabled && !state.replay?.active" :connected="carControl.status.connected && !state.replay?.active" :held="carControl.held" @press="carControl.press" @release="carControl.release" @stop="carControl.stop()" />
+        <fieldset :disabled="state.replay?.active || programmingBusy" class="car-replay-guard"><CarControlPanel :control="carControl" /></fieldset>
+        <div class="remote-enable"><button class="button primary" :disabled="state.replay?.active || programmingBusy || !carControl.canEnable || carControl.enabled" @click="enableRemote">{{ carControl.enabled ? '遥控已启用' : '启用遥控' }}</button></div>
+        <CarControlPad :enabled="carControl.enabled && !state.replay?.active && !programmingBusy" :connected="carControl.status.connected && !state.replay?.active && !programmingBusy" :held="carControl.held" @press="carControl.press" @release="carControl.release" @stop="carControl.stop()" />
         <p class="remote-sequence">按住行驶，松开停止</p>
         <p v-if="carControl.notice" class="remote-notice" role="status">{{ carControl.notice }}</p>
         <p v-if="carControl.apiError || carControl.error || carControl.status.error" class="host-error" role="alert">{{ carControl.apiError || carControl.error || carControl.status.error }}</p>
@@ -93,6 +94,7 @@
     <dialog ref="settingsDialog" class="engineering-dialog" @click="closeOnBackdrop">
       <header class="dialog-heading"><h2>设置</h2><button class="icon-button" aria-label="关闭设置" @click="settingsDialog.close()">×</button></header>
       <Fd2ControlPanel ref="hostControls" :state="hostState" @event="recordEvent" />
+      <FirmwarePanel ref="firmwarePanel" :state="hostState" @status="onFirmwareStatus" @started="onFirmwareStarted" />
       <details class="operator-help"><summary>模型与数据说明</summary><div class="help-content"><p>空载／有负载只切换模型显示，不表示检测到实物负载，也不修改控制参数。</p><p>摆角随有效遥测更新；旋臂按有效累计角的周期内姿态显示，车载底盘保持示意。没有对应实时数据时不生成运动或波形。</p></div></details>
       <div class="engineering-row"><span>机械姿态映射</span><button class="button compact" @click="openCalibration">姿态标定</button></div>
       <dl class="engineering-readouts">
@@ -106,13 +108,15 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import DigitalTwin3D from './DigitalTwin3D.vue'
 import WaveformPanel from './WaveformPanel.vue'
 import CarControlPanel from './CarControlPanel.vue'
 import CarControlPad from './CarControlPad.vue'
 import Fd2ControlPanel from './Fd2ControlPanel.vue'
 import Fd2FeaturePanel from './Fd2FeaturePanel.vue'
+import FirmwarePanel from './FirmwarePanel.vue'
+import { firmwarePhaseLabel } from './firmwarePresentation.js'
 import { isFd2, appendFd2Samples, periodicArm, fd2Freshness, replayCacheNow, fd2RmsAngle } from './fd2Presentation.js'
 import GesturePanel from './GesturePanel.vue'
 import { useCarControl } from './useCarControl.js'
@@ -132,6 +136,9 @@ const state = reactive({
   parameters:{},parameter_specs:[],requests:{},status:{},
 })
 const hostControls=ref(null)
+const firmwarePanel=ref(null)
+const firmwareStatus=ref({busy:false,phase:'idle',job:null,error:null})
+const programmingBusy=computed(()=>Boolean(firmwareStatus.value.busy || state.programming?.busy))
 const samples = shallowRef([])
 const chartSamples = shallowRef([])
 const chartNow = ref(Date.now())
@@ -148,11 +155,11 @@ let chartRenderTimer = null
 let reconnectTimer = null
 let destroyed = false
 
-const statusOnline=computed(()=>isFd2(state.firmware)?fd2Freshness(state,clock.value).status:state.status_fresh && clock.value/1000-Number(state.observed_at)<2)
-const hostState=computed(()=>({...state,status_fresh:statusOnline.value,display_fresh:isFd2(state.firmware)?fd2Fresh.value:state.display_fresh,presentation_now_ms:clock.value}))
+const statusOnline=computed(()=>!programmingBusy.value && (isFd2(state.firmware)?fd2Freshness(state,clock.value).status:state.status_fresh && clock.value/1000-Number(state.observed_at)<2))
+const hostState=computed(()=>({...state,status_fresh:statusOnline.value,display_fresh:isFd2(state.firmware)?fd2Fresh.value:state.display_fresh,presentation_now_ms:clock.value,programming:{...state.programming,busy:programmingBusy.value}}))
 const precisionFresh=computed(()=>state.firmware !== 'SP24' || Boolean(state.precision && state.precision.available !== false && !state.precision.stale &&
   Number.isFinite(state.precision.age_s) && state.precision.age_s + Math.max(0,clock.value/1000-Number(state.observed_at)) < .25))
-const fd2Fresh = computed(() => fd2Freshness(state,clock.value).control)
+const fd2Fresh = computed(() => !programmingBusy.value && fd2Freshness(state,clock.value).control)
 const angleOnline = computed(() => isFd2(state.firmware) ? fd2Fresh.value : precisionFresh.value && pageFresh(state.angle_received_at, clock.value, statusOnline.value))
 const pwmOnline = computed(() => isFd2(state.firmware) ? fd2Fresh.value : precisionFresh.value && pageFresh(state.arm_received_at, clock.value, statusOnline.value))
 const precisionSummary=computed(()=>{
@@ -185,8 +192,11 @@ function changeScene(mode){
   void carControl.deactivate('使用场景已切换')
   sceneMode.value=mode
 }
-function openSettings(){void carControl.deactivate('参数设置已打开');settingsDialog.value.showModal()}
-async function enableRemote(){if(state.replay?.active)return;await carControl.enable();if(document.activeElement instanceof HTMLElement)document.activeElement.blur()}
+function openSettings(){void carControl.deactivate('参数设置已打开');settingsDialog.value.showModal();void firmwarePanel.value?.refresh()}
+async function enableRemote(){if(state.replay?.active || programmingBusy.value)return;await carControl.enable();if(document.activeElement instanceof HTMLElement)document.activeElement.blur()}
+function onFirmwareStatus(value){firmwareStatus.value=value}
+function onFirmwareStarted(){carControl.cancelForProgramming()}
+watch(programmingBusy,busy=>{if(busy)carControl.cancelForProgramming()})
 function closeOnBackdrop(event){ if (event.target === settingsDialog.value) settingsDialog.value.close() }
 function openCalibration(){
   settingsDialog.value.close()

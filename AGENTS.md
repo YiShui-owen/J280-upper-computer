@@ -7,6 +7,8 @@
 |文件|职责|
 |---|---|
 |`backend/host_bridge.py`|固定 loopback HTTP 客户端、身份/命令检查、分页遥测转换与去重|
+|`backend/firmware_service.py`、`firmware_api.py`、`managed_host.py`、`gowin_programmer.py`|固定SRAM任务、每机设置、官方CLI适配、原Host交接及显式启动；本机journal在 `.local/firmware`|
+|`host/fd2_automation.py`、`frontend/src/FirmwarePanel.vue`、`firmware/`|原Host控制栅栏、固件切换界面及五份原位流/来源清单|
 |`backend/fd2_telemetry.py`、`host/fd2_bridge.py`、`host/fd2_replay.py`|FD2 五版身份、coherent T 和独立 D 游标、一次性命令及原生日志 RX-only 回放|
 |`host/fd2/upstream`|V5 包中的原样通用 Host 与 CPython 3.12；来源及逐文件哈希在 `host/fd2`|
 |`backend/sp24_telemetry.py`、`host/sp24_bridge.py`|SP24原Host外层只读游标历史、精确帧时间/原点/有效性适配；不改控制|
@@ -27,7 +29,9 @@
 
 版本约定（用户于2026-10-16明确）：日常使用始终以用户最新交付为准。最新交付作为唯一日常启动和页面入口；历史版本仅在仓库中备份供追溯。2026-10-25 已将日常入口切换为 FD2 V1～V5。记录约定本身不代表授权自动提交或推送仓库。
 
-自动烧录评估（2026-10-25）：用户选择 SRAM 临时下载，断电不保留；提供的本机 Programmer 目录为 `C:\Gowin\Gowin_V1.9.12.03_x64\Programmer\bin`，已只读确认存在 `programmer_cli.exe`。后续实现需支持不同电脑的路径发现/本机配置，不能写死该绝对路径。目前仅评估，尚未授权实施自动烧录或进行硬件下载。用户已明确要求先将现有版本同步到 GitHub，固定恢复标签见 `VERSIONING.md`。
+SRAM自动化（2026-10-25）：用户已授权实施软件，选择SRAM临时下载、断电不保留；此前只评估的限制由本次授权替代，开发验证仍不访问真实COM/BLE/JTAG或执行真实下载。本机Programmer目录为 `C:\Gowin\Gowin_V1.9.12.03_x64\Programmer\bin`，文件发现和实际 `--help` 已确认支持GW2A-55C及操作4。支持跨电脑发现/配置，不写死绝对路径。原版已同步GitHub并固定恢复标签，本次在 `feature/sram-programming` 分支修改，未自动提交/推送。
+
+归档决定（2026-10-26，替代上述未推送状态）：用户明确要求将本版自动化备份到GitHub，再把自动化之前的版本作为当前版本。自动化归档于 `feature/sram-programming` 和标签 `sram-programming-backup-20261026`；日常 `main` 恢复 `fd2-v1-v5-before-auto-programming-20261025` 的程序。此分支保留实现及验证记录，不再继续推进实机自动烧录或合并到main。
 
 界面基准（用户于2026-10-16确认）：当前 UI 设计已通过，见 `DESIGN.md` 第10节及 `docs/design/2026-10-16/` 的离线参考图。后续沿用石墨灰、银色模型、少量琥珀色操作、桌面模型向上和左右跨列绘制、手势区等线字体及统一字阶；不默认恢复文字黑色衬底、模糊阴影或堆叠小字说明。除用户进一步要求，不主动重排已通过的布局。
 
@@ -37,6 +41,9 @@
 
 ## 通信与数据保护
 
+- 固件切换只接受原包五份固定SHA256位流、唯一明确下载器和单个GW2A-55C，唯一写操作为SRAM `--run 4`。CLI未知格式、计数矛盾、缺Verify或超时均不得报成功；禁止Flash、自动重试及任意进程参数入口。
+- 交接时所有来源普通写入均被外层栅栏拦截，STOP/ESTOP与读回保留。必须收到真实STOP ACK及较新的独立停止状态，才能释放原owner。新Host只允许一次受托连接，身份/新会话核验后显式complete解锁；不自动ZERO/RUN/恢复PID。
+- 未抓零的FD2固件只发10Hz非coherent状态T（epoch=0），仍含真实输出/许可；仅在IDLE、未抓零、故障0、实际PWM0及许可关闭时用于停止/首次连接核验，不进入控制波形。coherent事务仍要求独立新epoch和原控制新鲜度。回放禁止下载；没有Host时须本次明确确认电机供电隔离。
 - FD2 V1～V5 完整 firmware/schema/wire 身份见 `host/fd2/README.md`，三者共同核验。V3 自适应是角 P/D；V5 已移除自动起摆，网页不得恢复该动作。V4/V5 定位是旋臂相对定位，不是车辆位移。
 - FD2 T 为200Hz完整控制事务，D为独立诊断；不得用状态快照或网络轮询替代原始批量采样。板时用于绘图，接收时刻用于链路龄；宽计数以十进制字符串保留。摆角为 `(ADC12-3085)*345/4096`，旋臂为 `count*360/1040`，PWM 为实际 Q15。累计角不等于机械零点。
 - FD2 状态、控制和诊断各自500ms失效；V3均值采用上游1秒/5秒时间加权统计并显示覆盖率。手势识别、全局最近动作原因、ACK、规划完成、跟踪到位分别展示，不相互推断。

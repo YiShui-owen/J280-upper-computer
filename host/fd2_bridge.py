@@ -47,7 +47,7 @@ def load_upstream():
 
         result = {
             name: importlib.import_module(name)
-            for name in ("protocol", "client", "trace_log")
+            for name in ("protocol", "client", "trace_log", "log_policy", "dual_transport")
         }
         _MODULES = result
     finally:
@@ -97,6 +97,9 @@ class Bridge:
         self._reset_count = 0
         self.state = load_upstream()["client"].HostState(variant)
         self.server = None
+        from host.fd2_automation import Automation
+
+        self.automation = Automation(self)
 
     def new_session(self):
         with self.dispatch_lock, self.lock:
@@ -115,10 +118,12 @@ class Bridge:
 
     def attach(self, owner):
         with self.dispatch_lock, self.lock:
+            self.automation.ensure_new_owner()
             self.new_session()
             self.owner = owner
             self.state = owner.state
             self._reset_count = owner.state.board_resets
+            self.automation.attached(owner)
 
     def capture(self, frame, *, received_at=None):
         kind = frame.get("kind")
@@ -259,6 +264,7 @@ class Bridge:
                         route_errors=errors,
                     ),
                     replay=self.replay,
+                    automation=self.automation.status(),
                 )
             )
 
@@ -308,6 +314,8 @@ class Bridge:
         with self.lock:
             if self.replay["active"]:
                 raise ValueError("replay rejects all hardware commands")
+            if self.automation.active_record() and action not in ("stop", "estop"):
+                raise ValueError("SRAM handoff blocks control commands")
             previous = self.requests.get(rid)
             signature = dict(action=action, value=value)
             if previous:
@@ -355,8 +363,13 @@ class Bridge:
 
     def trace(self, event, fields):
         with self.lock:
+            self.automation.trace(event, fields)
             source = fields.get("source", "")
             wire_id = fields.get("request_id")
+            if event == 'automation_write_blocked' and source.startswith('WEB/'):
+                rejected = self.requests.get(source[4:])
+                if rejected:
+                    rejected.update(state='rejected', message='SRAM handoff cancelled control before transmission')
             if event == "write_requested" and source.startswith("WEB/"):
                 rid = source[4:]
                 if rid in self.requests:
@@ -384,6 +397,8 @@ class Bridge:
                 self.requests[rid].update(
                     state="accepted" if fields["status"] == 0 else "rejected",
                     ack_status=fields["status"],
+                    ack_control_epoch=fields.get('control_epoch'),
+                    ack_received_mono=time.monotonic(),
                     message="Physical ACK; mechanical completion is reported separately",
                 )
             if rid and event in ("write_unknown", "timeout"):
@@ -445,14 +460,27 @@ class Bridge:
                 if not self.local():
                     return self.reply(403, {"error": "local bridge clients only"})
                 try:
-                    if self.path != "/command":
+                    actions = {
+                        '/command': bridge.command,
+                        '/automation/prepare': bridge.automation.prepare,
+                        '/automation/release': bridge.automation.release,
+                        '/automation/close': bridge.automation.close,
+                        '/automation/complete': bridge.automation.complete,
+                    }
+                    if self.path not in actions:
                         return self.reply(404, {"error": "not found"})
                     length = int(self.headers.get("Content-Length", "0"))
                     if not 1 <= length <= 8192:
                         raise ValueError("Content-Length must be 1..8192")
-                    self.reply(200, bridge.command(json.loads(self.rfile.read(length))))
+                    self.reply(200, actions[self.path](json.loads(self.rfile.read(length))))
+                    if self.path == '/automation/close':
+                        self.wfile.flush()
+                        bridge.automation.finish_close()
                 except (ValueError, TypeError, KeyError) as exc:
-                    self.reply(400, {"error": str(exc)})
+                    from host.fd2_automation import AutomationError
+
+                    self.reply(409 if isinstance(exc, AutomationError) else 400,
+                               exc.response if isinstance(exc, AutomationError) else {"error": str(exc)})
 
         self.server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
         threading.Thread(
@@ -467,10 +495,68 @@ def install(bridge, modules=None):
     original_init = cls.__init__
     original_receive = cls._receive
     original_trace = cls.trace
+    # Old observation-only callers restore three methods after a test. Keep the
+    # added wrappers idempotent and route them through each owner's own adapter.
+    if not hasattr(cls, '_fd2_automation_originals'):
+        cls._fd2_automation_originals = {name: getattr(cls, name)
+            for name in ('command', '_send', 'start', 'stop')}
+    originals = cls._fd2_automation_originals
 
     def init(owner, *args, **kwargs):
-        original_init(owner, *args, **kwargs)
-        bridge.attach(owner)
+        with bridge.dispatch_lock:
+            with bridge.lock:
+                bridge.automation.ensure_new_owner()
+            original_init(owner, *args, **kwargs)
+            owner._fd2_automation = bridge.automation
+            bridge.attach(owner)
+
+    def command(owner, opcode, *args, **kwargs):
+        adapter = getattr(owner, '_fd2_automation', None)
+        if adapter is None:
+            return originals['command'](owner, opcode, *args, **kwargs)
+        with adapter.bridge.dispatch_lock:
+            with adapter.bridge.lock:
+                adapter.ensure_opcode(owner, opcode)
+            return originals['command'](owner, opcode, *args, **kwargs)
+
+    def send(owner, opcode, *args, **kwargs):
+        adapter = getattr(owner, '_fd2_automation', None)
+        if adapter is None:
+            return originals['_send'](owner, opcode, *args, **kwargs)
+        with adapter.bridge.dispatch_lock:
+            blocked_queue_entry = False
+            with adapter.bridge.lock:
+                active = adapter.active_record()
+                if (active and owner is active['owner']
+                        and opcode not in modules['protocol'].SAFE
+                        and not kwargs.get('internal', False)):
+                    blocked_queue_entry = True
+                else:
+                    adapter.ensure_opcode(owner, opcode)
+                suppress = adapter.suppress_shutdown_stop(owner, opcode, kwargs.get('internal', False))
+            if blocked_queue_entry:
+                # A native queue entry may have been popped before prepare's
+                # STOP cancels the queue. Drop it without terminating native RX.
+                owner.trace('automation_write_blocked', opcode=opcode,
+                            source=owner._sending_source)
+            elif not suppress:
+                return originals['_send'](owner, opcode, *args, **kwargs)
+
+    def start(owner):
+        adapter = getattr(owner, '_fd2_automation', None)
+        if adapter is None:
+            return originals['start'](owner)
+        with adapter.bridge.dispatch_lock:
+            with adapter.bridge.lock:
+                adapter.ensure_start(owner)
+            return originals['start'](owner)
+
+    def stop(owner, wait=True):
+        adapter = getattr(owner, '_fd2_automation', None)
+        if adapter is not None:
+            with adapter.bridge.lock:
+                adapter.ensure_stop(owner)
+        return originals['stop'](owner, wait=wait)
 
     def receive(owner, raw, item):
         with owner.state.lock:
@@ -507,3 +593,7 @@ def install(bridge, modules=None):
     cls.__init__ = init
     cls._receive = receive
     cls.trace = trace
+    cls.command = command
+    cls._send = send
+    cls.start = start
+    cls.stop = stop

@@ -26,6 +26,7 @@ return w?{kp:w.kp,kd:w.kd,coverage:Math.min(1,w.covered_ms/windowMs)}:{kp:null,k
 
 export function canFd2Command(state,action,now=Date.now()){if(state.replay?.active||!isFd2(state.firmware)||!fd2Actions(state.firmware).includes(action))return false;
 if(['stop','estop'].includes(action))return Boolean(state.host_online);
+if(state.programming?.busy)return false;
 const fresh=fd2Freshness(state,now);
 return fresh.status&&(!['position','trajectory'].includes(action)||fresh.control)}
 

@@ -13,10 +13,14 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from host_bridge import BridgeError, HostClient, TelemetryAdapter, empty_state, identify, validate_action, validate_config
 from car_api import router as car_router, service as car_service
+from firmware_api import router as firmware_router, service as firmware_service
+from firmware_service import FirmwareError, atomic_json
+from managed_host import ManagedHostGateway
 
 CONFIG_PATH=Path(__file__).resolve().parent/'config.json'
 app=FastAPI(title='J280 V1–V5 Showcase',version='3.0.0')
 app.include_router(car_router)
+app.include_router(firmware_router)
 app.add_middleware(CORSMiddleware,allow_origins=['http://localhost:5173','http://127.0.0.1:5173'],
                    allow_credentials=True,allow_methods=['*'],allow_headers=['*'])
 
@@ -90,19 +94,37 @@ class Hub:
             except Exception: self.clients.discard(ws)
 
     async def poll_once(self):
+        epoch=firmware_service.epoch
+        if firmware_service.busy:
+            previous=self.latest
+            self.latest=empty_state()
+            self.latest.update(firmware=previous.get('firmware'),observed_at=time.time(),
+                               programming=firmware_service.summary())
+            self.samples.clear()
+            self.adapter=TelemetryAdapter()
+            self.wave_cursor=self.wave_stream=self.wave_endpoint=None
+            self.last_error='正在切换固件，等待新的USB会话'
+            await self.broadcast(dict(type='telemetry',data=self.latest,samples=[],reset=True))
+            return
         reset=False
         rows=[]
         try:
             cfg=load_config()
             client=HostClient(cfg['bridge_port'])
             snapshot=await asyncio.to_thread(client.status)
+            if firmware_service.busy or firmware_service.epoch!=epoch: return
             if cfg!=load_config(): return  # Ignore an old endpoint after a settings change.
             variant=identify(snapshot,cfg['firmware_variant'])
             waveform=None
             if variant=='SP24' or variant in ('V1','V2','V3','V4','V5'):
                 waveform,endpoint=await self.read_waveform(client,cfg)
+                if firmware_service.busy or firmware_service.epoch!=epoch: return
                 if cfg!=load_config(): return
             data,rows,reset=self.adapter.observe(snapshot,time.time(),cfg['firmware_variant'],waveform=waveform)
+            if firmware_service.busy or firmware_service.epoch!=epoch: return
+            data['programming']=firmware_service.summary()
+            if snapshot.get('automation',{}).get('busy'):
+                data['programming'].update(host_locked=True,busy=True)
             if waveform is not None:
                 # Advance only after the entire fetched batch was converted successfully.
                 self.wave_cursor,self.wave_stream,self.wave_endpoint=waveform['cursor'],waveform['stream'],endpoint
@@ -140,6 +162,24 @@ class Hub:
 hub=Hub()
 
 
+def _commit_firmware_variant(variant):
+    atomic_json(CONFIG_PATH,dict(load_config(),firmware_variant=variant))
+
+
+def _quiesce_car_for_programming():
+    status=car_service.status()
+    if status.get('connected'):
+        car_service.stop(status['session'])
+
+
+firmware_service.bind(
+    host_factory=lambda: ManagedHostGateway(load_config()['bridge_port'],store=firmware_service.store),
+    commit_variant=_commit_firmware_variant,
+    car_quiesce=_quiesce_car_for_programming,
+    is_replay=lambda: bool(hub.latest.get('replay',{}).get('active')),
+)
+
+
 @app.on_event('startup')
 async def startup(): await hub.start()
 
@@ -158,11 +198,18 @@ def root(): return dict(name='J280 Showcase Backend',version='3.0.0')
 
 @app.get('/health')
 def health():
-    return dict(ok=bool(hub.latest.get('status_fresh')),config=load_config(),last_error=hub.last_error,latest=hub.latest)
+    state=snapshot()['latest']
+    return dict(ok=bool(state.get('status_fresh')),config=load_config(),last_error=hub.last_error,latest=state)
 
 
 @app.get('/snapshot')
-def snapshot(): return dict(latest=hub.latest,history=list(hub.samples),error=hub.last_error)
+def snapshot():
+    latest=dict(hub.latest,programming=firmware_service.summary())
+    if firmware_service.busy:
+        latest=dict(empty_state(),firmware=hub.latest.get('firmware'),programming=firmware_service.summary())
+    elif hub.latest.get('programming',{}).get('host_locked'):
+        latest['programming'].update(host_locked=True,busy=True)
+    return dict(latest=latest,history=[] if firmware_service.busy else list(hub.samples),error=hub.last_error)
 
 
 @app.get('/config')
@@ -194,9 +241,10 @@ def presets():
 async def update_config(body:ConfigUpdate):
     try: cfg=validate_config(body.model_dump())
     except BridgeError as exc: raise HTTPException(400,str(exc)) from exc
-    temp=CONFIG_PATH.with_suffix('.json.tmp')
-    temp.write_text(json.dumps(cfg,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
-    temp.replace(CONFIG_PATH)
+    try:
+        await asyncio.to_thread(firmware_service.run_control,'config',atomic_json,CONFIG_PATH,cfg)
+    except FirmwareError as exc:
+        raise HTTPException(409,str(exc)) from exc
     hub.adapter=TelemetryAdapter(); hub.samples.clear(); hub.latest=empty_state()
     hub.wave_cursor=hub.wave_stream=hub.wave_endpoint=None
     hub.last_error='连接设置已更新，等待对应 Host'
@@ -206,17 +254,24 @@ async def update_config(body:ConfigUpdate):
 
 @app.post('/command')
 async def command(body:Command):
+    try:
+        return await asyncio.to_thread(firmware_service.run_control,body.action,_dispatch_command,body)
+    except FirmwareError as exc:
+        raise HTTPException(409,dict(request_id=body.request_id,state='rejected',message=str(exc))) from exc
+
+
+def _dispatch_command(body):
     cfg=load_config()
     client=HostClient(cfg['bridge_port'])
     payload=body.model_dump(exclude_unset=True)
     try:
-        status=await asyncio.to_thread(client.status)
+        status=client.status()
         validate_action(payload,status,cfg['firmware_variant'])
     except BridgeError as exc:
         raise HTTPException(409,dict(request_id=body.request_id,state='rejected',message=str(exc))) from exc
     try:
         # Exactly one POST: never retry an action after a network or ACK timeout.
-        result=await asyncio.to_thread(client.command,payload)
+        result=client.command(payload)
         return {k:v for k,v in result.items() if k!='fingerprint'}
     except BridgeError as exc:
         if getattr(exc,'request_rejected',False):

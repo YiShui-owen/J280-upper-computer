@@ -5,6 +5,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from car_service import CarError, CarService
+from firmware_api import service as firmware_service
+from firmware_service import FirmwareError
 
 service = CarService()  # Construction does not start a worker or access Bluetooth.
 router = APIRouter(prefix='/car', tags=['car'])
@@ -26,9 +28,11 @@ class IntentBody(SessionBody):
     steering: Literal['LEFT', 'CENTER', 'RIGHT']
 
 
-def _call(function, *args):
+def _call(action, function, *args):
     try:
-        return function(*args)
+        return firmware_service.run_control(action,function,*args)
+    except FirmwareError as exc:
+        raise HTTPException(exc.status_code,str(exc)) from exc
     except CarError as exc:
         raise HTTPException(exc.status_code, str(exc)) from exc
 
@@ -40,24 +44,24 @@ def status():
 
 @router.post('/scan')
 def scan():
-    return _call(service.scan)
+    return _call('car-scan',service.scan)
 
 
 @router.post('/connect')
 def connect(body: ConnectBody):
-    return _call(service.connect, body.device_id)
+    return _call('car-connect',service.connect, body.device_id)
 
 
 @router.post('/intent')
 def intent(body: IntentBody):
-    return _call(service.intent, body.session, body.sequence, body.direction, body.steering)
+    return _call('car-intent',service.intent, body.session, body.sequence, body.direction, body.steering)
 
 
 @router.post('/stop')
 def stop(body: SessionBody):
-    return _call(service.stop, body.session)
+    return _call('stop',service.stop, body.session)
 
 
 @router.post('/disconnect')
 def disconnect(body: SessionBody):
-    return _call(service.disconnect, body.session)
+    return _call('disconnect',service.disconnect, body.session)

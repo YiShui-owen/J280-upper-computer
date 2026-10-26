@@ -154,6 +154,10 @@ export function useCarControl() {
   }
   function keyup(event) { if (keyAction(event.code)) release(`key:${event.code}`) }
   function deactivate(reason) { if (session) return stop(reason); clearInput() }
+  function cancelForProgramming() {
+    clearInput()
+    model.notice = '固件切换期间遥控已取消，停车由后台确认'
+  }
   function loseFocus() { void deactivate('页面已失去焦点') }
   function visibility() { if (document.hidden) loseFocus() }
   onMounted(() => {
@@ -168,5 +172,5 @@ export function useCarControl() {
     window.removeEventListener('blur', loseFocus); window.removeEventListener('pagehide', loseFocus)
     document.removeEventListener('visibilitychange', visibility)
   })
-  return Object.assign(model, {scan,connect,disconnect,enable,stop,deactivate,press,release})
+  return Object.assign(model, {scan,connect,disconnect,enable,stop,deactivate,cancelForProgramming,press,release})
 }

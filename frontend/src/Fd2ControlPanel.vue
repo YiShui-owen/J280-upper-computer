@@ -1,14 +1,14 @@
 <template>
  <section class="host-control-panel fd2-controls">
   <form class="connection-form" @submit.prevent="saveConnection">
-<label>Host 桥端口 <input v-model.number="connection.bridge_port" type="number" min="1024" max="65535" required>
+<label>Host 桥端口 <input v-model.number="connection.bridge_port" :disabled="state.programming?.busy" type="number" min="1024" max="65535" required>
 </label>
-<label>固件 <select v-model="connection.firmware_variant">
+<label>固件 <select v-model="connection.firmware_variant" :disabled="state.programming?.busy">
 <option value="auto">自动识别 V1～V5</option>
 <option v-for="v in versions" :key="v" :value="v">{{ v }}</option>
 </select>
 </label>
-<button class="button compact" :disabled="state.replay?.active">保存连接设置</button>
+<button class="button compact" :disabled="state.replay?.active || state.programming?.busy">保存连接设置</button>
 </form>
   <p>串口由配套 Host 显式连接；USB 与 BT10 命令链路独立。</p>
   <p v-if="state.replay?.active" class="host-error">离线回放 · 全部硬件操作已禁用</p>
@@ -66,7 +66,7 @@ records.value=[...records.value]}}
 async function query(record){try{Object.assign(record,await request('/requests/'+encodeURIComponent(record.request_id)));
 records.value=[...records.value]}
 catch(e){notice.value=e.message}}
-async function saveConnection(){try{await request('/config',{...connection});
+async function saveConnection(){if(props.state.programming?.busy)return;try{await request('/config',{...connection});
 notice.value='连接设置已保存'}
 catch(e){notice.value=e.message}}
 watch(()=>props.state.requests,requests=>{for(const r of records.value)if(requests?.[r.request_id])Object.assign(r,requests[r.request_id]);

@@ -1,0 +1,51 @@
+{
+  "format_version": 1,
+  "device": "GW2A-55C",
+  "firmwares": {
+    "V1": {
+      "path": "firmware/V1/J280_V1.fs",
+      "sha256": "b1f76dee49ae4aeaf11772944865bf94ecc8a444e085271fa3fc2638b2990971",
+      "size": 18588969,
+      "device": "GW2A-55C",
+      "source_archive": "J280_V1_V2_V3_Qualified_20261025_1041.zip",
+      "source_archive_sha256": "21c5f6d5a9036b7b5bd1f65a998c43aad0136d1e75095011b497caa337d53173",
+      "source_member": "V1/bitstream/J280_V1.fs"
+    },
+    "V2": {
+      "path": "firmware/V2/J280_V2.fs",
+      "sha256": "3cccd930c73e9b9c83ff5dbf845eadd8e68e93248c8a5946f5da466e915c7cc4",
+      "size": 18588969,
+      "device": "GW2A-55C",
+      "source_archive": "J280_V1_V2_V3_Qualified_20261025_1041.zip",
+      "source_archive_sha256": "21c5f6d5a9036b7b5bd1f65a998c43aad0136d1e75095011b497caa337d53173",
+      "source_member": "V2/bitstream/J280_V2.fs"
+    },
+    "V3": {
+      "path": "firmware/V3/J280_V3.fs",
+      "sha256": "c3485c3e2abf0ccefbb4d4fad2b3a22b27e9464167585a02c386497d7771edd5",
+      "size": 18588969,
+      "device": "GW2A-55C",
+      "source_archive": "J280_V1_V2_V3_Qualified_20261025_1041.zip",
+      "source_archive_sha256": "21c5f6d5a9036b7b5bd1f65a998c43aad0136d1e75095011b497caa337d53173",
+      "source_member": "V3/bitstream/J280_V3.fs"
+    },
+    "V4": {
+      "path": "firmware/V4/J280_V4.fs",
+      "sha256": "a64cee672cd34fa2a402f866a9fc248c8dae1de08a889b99b91b535484196e48",
+      "size": 18588969,
+      "device": "GW2A-55C",
+      "source_archive": "J280_V4_Qualified_20261025_1046.zip",
+      "source_archive_sha256": "e80a4227f82eeaa1cc4d970d23fc6f58c0c9dbd1db8290285d1a5b868a9bdb63",
+      "source_member": "V4/bitstream/J280_V4.fs"
+    },
+    "V5": {
+      "path": "firmware/V5/J280_V5.fs",
+      "sha256": "066a086ea57d51e9da3e14eff8a4dfa94532a3190e737a3361f77bd69e99abc5",
+      "size": 18588969,
+      "device": "GW2A-55C",
+      "source_archive": "J280_V5_Standalone_20261025(1).zip",
+      "source_archive_sha256": "4815a9486373a068d20831889d789fe79afced1ecd533d2b8b6bafa3bacd3474",
+      "source_member": "V5/bitstream/J280_V5.fs"
+    }
+  }
+}
