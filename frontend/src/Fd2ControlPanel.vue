@@ -55,7 +55,7 @@ throw e;
 }return d}
 finally{clearTimeout(timer)}}
 async function send(action,value){if(!actions.value.includes(action)||!canSend(action))return;
-const record={request_id:crypto.randomUUID(),action,state:'pending'};
+const record={request_id:crypto.randomUUID(),action,value,host_session:props.state.session,host_firmware:props.state.firmware,state:'pending'};
 records.value=[record,...records.value].slice(0,12);
 inflight.value++;
 try{Object.assign(record,await request('/command',{request_id:record.request_id,action,...(value===undefined?{}:{value})}))}
@@ -78,7 +78,7 @@ catch(e){notice.value=e.message}})
 function run(){return send(actions.value.includes('start-swing')?'start-swing':'balance')}
 function stop(){return send('stop')}
 const runRequest=computed(()=>records.value.find(r=>['start-swing','balance'].includes(r.action)))
-defineExpose({run,stop,canRun,runLabel,runRequest,busy})
+defineExpose({run,stop,canRun,runLabel,runRequest,busy,send,canSend,records,query})
 </script>
 <style scoped>
 .connection-form,.debug-actions{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:16px 0}

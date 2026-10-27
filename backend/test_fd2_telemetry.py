@@ -1,5 +1,6 @@
 """FD2 display contract tests. Synthetic decoded frames; no device access."""
 import copy
+import math
 import unittest
 
 from host_bridge import BridgeError, TelemetryAdapter, identify, validate_action, validate_config
@@ -189,6 +190,122 @@ class FD2AdapterTests(unittest.TestCase):
         self.assertFalse(data['status_fresh'])
         self.assertTrue(data['display_fresh'])
         self.assertIsNotNone(data['angle_deg'])
+
+
+class FD2PendulumPoseTests(unittest.TestCase):
+    def test_positive_down_pose_keeps_clipped_control_angle_and_raw_frame(self):
+        item = frame(quiet_q4=8616, zero_q4=1000)
+        item['mean_adc12'] = 4095
+        original = copy.deepcopy(item)
+        data, rows, _ = TelemetryAdapter().observe(snapshot(), 1000, waveform=batch([item]))
+        self.assertIn('pendulum_pose_deg', rows[0])
+        self.assertAlmostEqual(rows[0]['pendulum_pose_deg'], 180.01078304746662)
+        self.assertAlmostEqual(data['pendulum_pose_deg'], rows[0]['pendulum_pose_deg'])
+        self.assertAlmostEqual(data['angle_deg'], 85.07080078125)
+        self.assertEqual(rows[0]['channels'], ['angle_deg', 'alpha_ref_deg', 'arm_angle_deg',
+                                             'arm_reference_deg', 'duty_actual_percent', 'angle_kp', 'angle_kd'])
+        self.assertTrue(rows[0]['angle_display_limited'])
+        self.assertTrue(data['angle_display_limited'])
+        self.assertEqual(rows[0]['alpha_ref_deg'], 0)
+        self.assertEqual(rows[0]['raw']['quiet_q4'], 8616)
+        self.assertEqual(item, original)
+
+    def test_negative_down_pose_and_zero_wrap_preserve_signed_direction(self):
+        cases = [(1000, 8616, -7616), (100, 16300, 184), (16300, 100, -184),
+                 (8192, 0, -8192), (0, 8192, -8192), (16383, 16383, 0)]
+        for variant in IDS:
+            for quiet, zero, delta in cases:
+                with self.subTest(variant=variant, quiet=quiet, zero=zero):
+                    item = frame(variant, quiet_q4=quiet, zero_q4=zero)
+                    data, rows, _ = TelemetryAdapter().observe(snapshot(variant), 1000,
+                                                               waveform=batch([item]))
+                    expected = delta * 6921 / (16 * 2**20) * 180 / math.pi
+                    self.assertIn('pendulum_pose_deg', rows[0])
+                    self.assertAlmostEqual(rows[0]['pendulum_pose_deg'], expected)
+                    self.assertAlmostEqual(data['pendulum_pose_deg'], expected)
+                    self.assertFalse(data['angle_display_limited'])
+
+    def test_missing_invalid_q4_and_missing_zero_flag_never_invent_pose(self):
+        cases = [('quiet_q4', None), ('zero_q4', None), ('quiet_q4', -1),
+                 ('zero_q4', 16384), ('quiet_q4', 16384), ('zero_q4', -1),
+                 ('quiet_q4', True), ('zero_q4', False), ('quiet_q4', 1.5),
+                 ('zero_q4', float('nan')), ('flags', 7), ('flags', None), ('flags', True)]
+        for key, value in cases:
+            with self.subTest(key=key, value=value):
+                item = frame(quiet_q4=8616, zero_q4=1000)
+                if value is None:
+                    item.pop(key)
+                else:
+                    item[key] = value
+                data, rows, _ = TelemetryAdapter().observe(snapshot(), 1000, waveform=batch([item]))
+                self.assertIn('pendulum_pose_deg', rows[0])
+                self.assertIsNone(rows[0]['pendulum_pose_deg'])
+                self.assertIsNone(data['pendulum_pose_deg'])
+
+    def test_limitation_flag_uses_same_coherent_control_frame(self):
+        for mean, limited in [(0, True), (4095, True), (3085, False), (None, False),
+                              (True, False), (4096, False)]:
+            with self.subTest(mean=mean):
+                item = frame(quiet_q4=1000, zero_q4=1000)
+                item['mean_adc12'] = mean
+                data, rows, _ = TelemetryAdapter().observe(snapshot(), 1000, waveform=batch([item]))
+                self.assertIn('angle_display_limited', rows[0])
+                self.assertIs(rows[0]['angle_display_limited'], limited)
+                self.assertIs(data['angle_display_limited'], limited)
+        item = frame(quiet_q4=8616, zero_q4=1000)
+        item.update(coherent=False, mean_adc12=4095)
+        data, rows, _ = TelemetryAdapter().observe(snapshot(), 1000, waveform=batch([item]))
+        self.assertEqual(rows, [])
+        self.assertIn('pendulum_pose_deg', data)
+        self.assertIsNone(data['pendulum_pose_deg'])
+        self.assertFalse(data['angle_display_limited'])
+
+    def test_stale_disconnected_and_invalidated_control_clear_display_fields(self):
+        for state, now in [(snapshot(), 1001), (snapshot(control_age_s=1), 1000.01),
+                           (snapshot(status_age_s=1), 1000.01),
+                           (snapshot(connected=False), 1000.01)]:
+            with self.subTest(state=state, now=now):
+                item = frame(quiet_q4=8616, zero_q4=1000)
+                item['mean_adc12'] = 4095
+                adapter = TelemetryAdapter()
+                data, _, _ = adapter.observe(snapshot(), 1000, waveform=batch([item]))
+                self.assertIn('pendulum_pose_deg', data)
+                self.assertIsNotNone(data['pendulum_pose_deg'])
+                data, _, _ = adapter.observe(state, now, waveform=batch([]))
+                self.assertIsNone(data['pendulum_pose_deg'])
+                self.assertFalse(data['angle_display_limited'])
+        adapter = TelemetryAdapter()
+        adapter.observe(snapshot(), 1000, waveform=batch([item]))
+        adapter.invalidate()
+        data, _, _ = adapter.observe(snapshot(), 1000.01, waveform=batch([item]))
+        self.assertIn('pendulum_pose_deg', data)
+        self.assertIsNone(data['pendulum_pose_deg'])
+        self.assertFalse(data['angle_display_limited'])
+
+    def test_new_control_with_missing_pose_does_not_retain_previous_pose(self):
+        item = frame(quiet_q4=8616, zero_q4=1000)
+        item['mean_adc12'] = 4095
+        adapter = TelemetryAdapter()
+        adapter.observe(snapshot(), 1000, waveform=batch([item]))
+        data, _, _ = adapter.observe(snapshot(), 1000.01,
+                                     waveform=batch([frame(seq=2, board=1005)], start=2, received=1000.005))
+        self.assertIn('pendulum_pose_deg', data)
+        self.assertIsNone(data['pendulum_pose_deg'])
+        self.assertFalse(data['angle_display_limited'])
+
+    def test_replay_retains_last_pose_without_claiming_live_hardware(self):
+        item = frame(quiet_q4=8616, zero_q4=1000)
+        item['mean_adc12'] = 4095
+        source = snapshot(connected=False, synced=False, replay=dict(active=True, finished=True))
+        adapter = TelemetryAdapter()
+        data, _, _ = adapter.observe(source, 1002, waveform=batch([item]))
+        self.assertIn('pendulum_pose_deg', data)
+        self.assertAlmostEqual(data['pendulum_pose_deg'], 180.01078304746662)
+        data, _, _ = adapter.observe(source, 1100, waveform=batch([]))
+        self.assertAlmostEqual(data['pendulum_pose_deg'], 180.01078304746662)
+        self.assertTrue(data['angle_display_limited'])
+        self.assertFalse(data['connected'])
+        self.assertFalse(data['status_fresh'])
 
 
 if __name__ == '__main__': unittest.main()

@@ -1,4 +1,13 @@
 export const isFd2 = firmware => /^V[1-5]$/.test(firmware || '')
+export function fd2TwinAngle(state) {
+ if(Object.hasOwn(state,'pendulum_pose_deg'))return Number.isFinite(state.pendulum_pose_deg) ? state.pendulum_pose_deg : null
+ // Older snapshots can still display in-range control angles. A clipped endpoint has no recoverable pose.
+ return state.angle_display_limited || !Number.isFinite(state.angle_deg) ? null : state.angle_deg
+}
+export function fd2FaultLabel(value) {
+ const label=({1:'角度越界保护',3:'急停保护',4:'ADC 越量程保护',5:'编码器测量保护',7:'超速保护',8:'运算故障保护',9:'起摆失败保护'})[value] || '未知故障'
+ return `${label}（${value}）`
+}
 export function fd2Actions(firmware) {
  const common=['stop','estop','zero','balance','clear-fault']
  if (['V1','V2','V4'].includes(firmware)) common.push('start-swing')
@@ -18,6 +27,28 @@ return true})}
 export function periodicArm(value){return Number.isFinite(value)?((value+180)%360+360)%360-180:null}
 
 export const gestureLabels={0:'无',1:'右滑',2:'左滑',3:'上滑',4:'下滑',5:'靠近',6:'远离',7:'顺时针',8:'逆时针',9:'挥手STOP'}
+
+export const fd2PositionPresets = Array.from({length:6}, (_,i) => ({value:i+1, label:`${(i+1)*60}°`}))
+export const fd2TrajectoryPresets = [
+  ['正弦往返','渐入渐出正弦'], ['三角往返','圆滑三角往返'], ['台阶驻留','分段台阶驻留'],
+  ['圆顶往返','圆顶驻留往返'], ['递增幅度','递增幅度三段'], ['扫频往返','有界扫频往返'],
+].map(([label,description],i) => ({value:i+1,label,description}))
+
+export function isNewFd2Gesture(previous, current, controlFresh) {
+  const event = current.gesture_event
+  return Boolean(controlFresh && ['V1','V2'].includes(current.firmware) && previous &&
+    previous.session === current.session && previous.firmware === current.firmware &&
+    Number.isInteger(previous.gesture_event?.sequence) && Number.isInteger(event?.sequence) &&
+    event.sequence > 0 && event.sequence !== previous.gesture_event.sequence &&
+    Number.isInteger(event.code) && event.code >= 1 && event.code <= 9)
+}
+
+export function fd2MotionLabel(action) {
+  if (action == null) return '—'
+  if (action >= 0x11 && action <= 0x16) return `相对定位 ${fd2PositionPresets[action-0x11].label}`
+  if (action >= 0x21 && action <= 0x26) return fd2TrajectoryPresets[action-0x21].label
+  return `动作 ${action}`
+}
 
 export function gainPair(g){return Array.isArray(g)?[g[0],g[2]]:[g?.kp??g?.angle_kp,g?.kd??g?.angle_kd]}
 

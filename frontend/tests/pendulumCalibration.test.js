@@ -38,6 +38,15 @@ test('SP24 显示标定与旧固件及通用配置隔离，不沿用旧版实测
   assert.equal(displayAlphaDeg(-180,calibrationDefaults('SP24')),180)
 })
 
+test('FD2 未裁切姿态使用独立新版标定，不继承旧控制显示角的标定',()=>{
+  for(const firmware of ['V1','V2','V3','V4','V5']) {
+    assert.equal(calibrationStorageKey(firmware),`j280:twin3d:calibration:v3:${firmware}`)
+    assert.equal(displayAlphaDeg(0,calibrationDefaults(firmware)),0)
+    assert.equal(displayAlphaDeg(180,calibrationDefaults(firmware)),-180)
+  }
+  assert.equal(calibrationStorageKey('SP24'),'j280:twin3d:calibration:v2:SP24')
+})
+
 test('手动下垂对齐只产生显示配置，并保留旋臂配置和角度方向',()=>{
   assert.equal(typeof calibrateDownPose,'function')
   const original={...calibrationDefaults('SA21'),thetaOffsetDeg:17,alphaDirection:1,alphaTwoPointEnabled:true}

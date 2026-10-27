@@ -347,6 +347,9 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px 
 .waveform-heading h2 { font-size:14px; }
 .waveform-tools { display:flex; align-items:center; gap:22px; }
 .waveform-tools > span { font-size:13px; }
+.waveform-range { display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px; }
+.waveform-range select { background:#292D26;color:#DCDCCF;border:1px solid #555B4E;border-radius:4px;padding:3px 6px;font:inherit; }
+@media (max-width:950px) { .waveform-heading { flex-wrap:wrap;gap:8px; }.waveform-tools { flex-wrap:wrap;gap:10px; }.console-waveforms { grid-template-rows:auto minmax(0,1fr); } }
 .precision-details { position:relative; font-size:13px; color:var(--muted); }
 .precision-details > summary { cursor:pointer; }
 .precision-summary { position:absolute; z-index:10; width:min(400px,80vw); right:0; bottom:28px; padding:16px 18px; border:1px solid #5A654C; border-radius:5px; background:#2D3327; color:#D6DFCA; font-size:14px; line-height:1.8; }

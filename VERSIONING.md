@@ -7,6 +7,18 @@
 
 远端仓库：https://github.com/YiShui-owen/J280-upper-computer
 
+### 2026-10-27：统一 Host 窗口前的展示版本
+
+固定标签：`showcase-before-host-unification-20261027`。按用户要求保存当前可恢复版本，包含较宽且稳定的波形量程、大图标手势反馈、V5主页面六位置/六轨迹操作、基于未裁切Q4的3D姿态及独立标定修复，以及20261027交付记录。
+
+当前五版FS及哈希清单一并保存在 `firmware/`；V1/V2/V5为新交付，V3/V4保留原版本。FS采用Git二进制属性保持原字节。完整原始ZIP和替换前FS仅备份在本机工作区 `历史版本备份/`，不属于仓库文件。此快照尚未实现网页选串口及后台Host统一管理，也未执行硬件烧录。
+
+恢复此版可在另一目录运行：
+
+```powershell
+git clone --branch showcase-before-host-unification-20261027 https://github.com/YiShui-owen/J280-upper-computer.git J280-before-host-unification
+```
+
 ### 2026-10-25：自动烧录前基线
 
 固定标签：`fd2-v1-v5-before-auto-programming-20261025`。此版包含 FD2 V1～V5 展示、原样 Host / CPython 运行时、120秒波形缓存及离线回放；自动烧录仍处于评估阶段，尚未加入程序。用户于当日要求将当前版提交并同步到 GitHub，作为后续自动化修改前的恢复点。

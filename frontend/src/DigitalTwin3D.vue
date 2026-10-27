@@ -50,6 +50,7 @@ const pendulumAssetUrl = new URL('./assets/models/l-pendulum.glb',import.meta.ur
 const props = defineProps({
   sceneMode: { type:String, default:'bench' },
   firmware: { type:String, default:'' },
+  session: { type:String, default:'' },
   armAngle: { type:Number, default:0 },
   pendulumAngle: { type:Number, default:0 },
   mode: { type:String, default:'WAITING' },
@@ -57,6 +58,7 @@ const props = defineProps({
   sampleTick: { type:Number, default:null }, // Existing FPGA timestamp (ms), independent of arrival bursts.
   armVelocity: { type:Number, default:null }, // Degrees/s, only used to validate the displayed pose.
   pendulumVelocity: { type:Number, default:null },
+  pwmPercent: { type:Number, default:null },
   leftWheelCount: { type:Number, default:0 },
   rightWheelCount: { type:Number, default:0 },
   steeringRequest: { type:Number, default:750 },
@@ -68,7 +70,8 @@ const calibrationOpen = ref(false)
 const modelError = ref('')
 const calibrationNotice = ref('')
 const calibrationProfile = ref(props.firmware)
-const canAlignDown = computed(() => Number.isFinite(props.pendulumAngle) && ['IDLE','ZERO','ARMED'].includes(props.mode))
+const canAlignDown = computed(() => Number.isFinite(props.pendulumAngle) &&
+  (['IDLE','ZERO','ARMED'].includes(props.mode) || (props.mode==='FAULT' && props.pwmPercent===0)))
 let destroyed = false
 function openCalibration(){ calibrationOpen.value = true }
 defineExpose({ openCalibration })
@@ -117,11 +120,15 @@ function alignDown(){
   Object.assign(calibration,calibrateDownPose(normalizedCalibration(calibration),props.pendulumAngle))
   calibrationNotice.value = `已按 ${props.pendulumAngle.toFixed(3)}° 对齐模型下垂；原始读数不变`
 }
-watch(()=>props.firmware, firmware=>{
-  if(!['SG21','SA21','SP24'].includes(firmware) || firmware===calibrationProfile.value)return
-  calibrationProfile.value=firmware
-  Object.assign(calibration,loadCalibration())
-  calibrationNotice.value=''
+watch([()=>props.firmware,()=>props.session], ([firmware])=>{
+  if(['SG21','SA21','SP24','V1','V2','V3','V4','V5'].includes(firmware) && firmware!==calibrationProfile.value){
+    calibrationProfile.value=firmware
+    Object.assign(calibration,loadCalibration())
+    calibrationNotice.value=''
+  }
+  // A new device/session can reuse its predecessor's board tick. It is a new pose sample.
+  for(const samples of [armSamples,pendulumSamples])Object.assign(samples,createAngleSamples())
+  lastSampleTick=null
 })
 function normalizeCalibration(){
   // Commit validation on change, allowing intermediate input such as '-' or '0.'.
@@ -130,7 +137,7 @@ function normalizeCalibration(){
 // Validate the two telemetry axes before applying calibration. Raw readouts,
 // charts and control data remain untouched. A repeated packet is not new evidence.
 watch(
-  () => [props.armAngle, props.pendulumAngle, props.armVelocity, props.pendulumVelocity, props.sampleTime, props.sampleTick],
+  () => [props.firmware,props.session,props.armAngle, props.pendulumAngle, props.armVelocity, props.pendulumVelocity, props.sampleTime, props.sampleTick],
   () => {
     const tick = Number.isFinite(props.sampleTick) ? props.sampleTick
       : props.sampleTime > 0 ? props.sampleTime * 1000 : null

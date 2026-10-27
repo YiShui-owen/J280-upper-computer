@@ -11,6 +11,7 @@ IDENTITIES = {1: ('46443231', '46443203', 2), 2: ('46443432', '46443402', 3),
 CONTROL_CHANNELS = ['angle_deg', 'alpha_ref_deg', 'arm_angle_deg', 'arm_reference_deg',
                     'duty_actual_percent', 'angle_kp', 'angle_kd']
 COUNT_SCALE = 360 / 1040
+POSE_Q4_DEG_SCALE = 6921 / (16 * 2**20) * 180 / math.pi
 FRESH_SECONDS = .5
 
 
@@ -81,6 +82,17 @@ def integer(frame, key, bits=64, signed=True):
 
 def scaled(value, scale=1, offset=0):
     return None if value is None else (value-offset)*scale
+
+
+def pendulum_pose_degrees(frame):
+    # Display the pre-clipping measurement; the controller's ADC12 angle is unchanged.
+    quiet = integer(frame, 'quiet_q4', 14, False)
+    zero = integer(frame, 'zero_q4', 14, False)
+    flags = integer(frame, 'flags', 8, False) or 0
+    if quiet is None or zero is None or not flags & 16:
+        return None
+    delta = (quiet-zero+8192) % 16384 - 8192
+    return delta * POSE_Q4_DEG_SCALE
 
 
 def gains(value):
@@ -188,6 +200,8 @@ class FD2TelemetryAdapter:
             base_gains = gains(frame.get('manual_gains'))
             row.update(channels=list(CONTROL_CHANNELS),
                        angle_deg=scaled(integer(frame, 'mean_adc12', 16, False), 345/4096, 3085),
+                       pendulum_pose_deg=pendulum_pose_degrees(frame),
+                       angle_display_limited=integer(frame, 'mean_adc12', 12, False) in (0, 4095),
                        alpha_ref_deg=scaled(integer(frame, 'target_angle_adc12', 16, False), 345/4096, 3085),
                        arm_angle_deg=scaled(integer(frame, 'wide_encoder'), COUNT_SCALE),
                        arm_reference_deg=scaled(integer(frame, 'wide_target'), COUNT_SCALE),
@@ -245,6 +259,8 @@ class FD2TelemetryAdapter:
                     session=snapshot.get('session'), connected=bool(snapshot.get('connected')) and not replaying,
                     synced=bool(snapshot.get('synced')) and not replaying, status_fresh=live,
                     status_age_s=snapshot.get('status_age_s'), display_fresh=control_fresh,
+                    pendulum_pose_deg=self.latest.get('pendulum_pose_deg') if control_fresh else None,
+                    angle_display_limited=bool(control_fresh and self.latest.get('angle_display_limited')),
                     telemetry_fresh=control_fresh, replay=safe_json(replay), transport=safe_json(snapshot.get('transport') or {}),
                     capabilities=capabilities(variant), mode=mode, fault=fault,
                     mode_name={0:'IDLE', 1:'ZERO', 2:'ARMED', 3:'BALANCE', 4:'FAULT', 5:'SWING'}.get(mode, 'WAITING'),

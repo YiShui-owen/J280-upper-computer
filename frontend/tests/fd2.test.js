@@ -18,4 +18,73 @@ test('replay cache retains last received clock after wall clock advances',()=>{c
 test('gain trend splits board gaps, explicit gaps and epochs',()=>{const r=(t,extra={})=>({plot_at:t,angle_kp:1,session_epoch:1,...extra});assert.equal(gainSegments([r(1),r(1.005),r(1.02),r(1.025,{gap_before:true}),r(1.03,{session_epoch:2})],'angle_kp').length,4);assert.equal(swingLabel(0),'SWM4');assert.equal(swingLabel(1),'SA21');assert.equal(swingLabel(2),'144')})
 test('120 second 200Hz plots reduce by pixels, preserve peaks and gaps without copying raw objects',()=>{const rows=Array.from({length:24001},(_,i)=>({plot_at:i*.005,measurement_at:i*.005,session_epoch:1,channels:['angle_deg'],angle_deg:i===12345?999:i===12346?-999:0,raw:{wide_encoder:'1152921504606846976'},gap_before:i===12347}));const o=createFd2WaveformOption(rows,120000,300,[],1500,120000,'horizontal');const points=o.series.find(s=>s.id==='angle_deg').data;assert(points.length<3000);assert(points.some(p=>p[1]===999));assert(points.some(p=>p[1]===-999));assert(points.some(p=>p[1]===null));assert(points.every(p=>p.length===2));assert.equal(rows.length,24001);assert.equal(rows[12345].raw.wide_encoder,'1152921504606846976')})
 import {fd2RmsAngle,formatMotionValue} from '../src/fd2Presentation.js'
+import * as fd2Presentation from '../src/fd2Presentation.js'
 test('FD2 RMS uses board plot time despite delayed arrival and a frozen replay clock',()=>{const rows=[{plot_at:1,received_at:100,angle_deg:999,channels:['angle_deg']},{plot_at:9,received_at:100,angle_deg:3,channels:['angle_deg']},{plot_at:10,received_at:200,angle_deg:4,channels:['angle_deg']},{plot_at:10,received_at:200,angle_deg:800,channels:['final_target_deg']},{plot_at:10,received_at:200,angle_deg:null,channels:['angle_deg']}];assert.equal(fd2RmsAngle(rows,10000),Math.sqrt(12.5));assert.equal(fd2RmsAngle(rows,10000),Math.sqrt(12.5));assert.equal(formatMotionValue('actual_count','1152921504606846976'),'1152921504606846976');assert.equal(formatMotionValue('measured_velocity_deg_s',6.923076923),'6.923')})
+
+const displayRows = (angle = 1, arm = 900, target = 920) => [
+  {plot_at:1, channels:['angle_deg','alpha_ref_deg','arm_angle_deg','arm_reference_deg'], angle_deg:angle, alpha_ref_deg:0, arm_angle_deg:arm, arm_reference_deg:arm},
+  {plot_at:1, channels:['final_target_deg'], final_target_deg:target},
+]
+test('small balance motion uses a wide, symmetric degree scale without altering samples', () => {
+  const rows=displayRows(.2), before=structuredClone(rows)
+  const option=createFd2WaveformOption(rows,1000)
+  assert.equal(option.yAxis[0].min,-30)
+  assert.equal(option.yAxis[0].max,30)
+  assert.equal(option.yAxis[0].interval,10)
+  assert.equal(option.yAxis[2].min,-100)
+  assert.equal(option.yAxis[2].max,100)
+  assert.deepEqual(rows,before)
+  assert.equal(option.series[0].data[0][1],.2)
+})
+test('display scales expand to include outliers and independent final targets, then remain stable', () => {
+  const expanded=createFd2WaveformOption(displayRows(-85,900,2200),1000)
+  assert(expanded.yAxis[0].min < -85)
+  assert(expanded.yAxis[1].min <= 900)
+  assert(expanded.yAxis[1].max > 2200)
+  const stable=createFd2WaveformOption(displayRows(.1,1000,1100),1000,500,[],600,10000,'stacked',{previousAxes:expanded.yAxis})
+  assert.deepEqual(stable.yAxis.map(a=>[a.min,a.max,a.interval]),expanded.yAxis.map(a=>[a.min,a.max,a.interval]))
+})
+test('arm plot retains cumulative degrees with at least a full turn visible and supports a wider angle preset', () => {
+  const option=createFd2WaveformOption(displayRows(.1,99999,100001),1000,500,[],600,10000,'stacked',{angleExtent:60})
+  assert.equal(option.yAxis[0].min,-60)
+  assert.equal(option.yAxis[0].max,60)
+  assert(option.yAxis[1].max-option.yAxis[1].min >= 720)
+  assert(option.yAxis[1].min <= 99999 && option.yAxis[1].max >= 100001)
+  assert.equal(option.series.find(s=>s.id==='arm_angle_deg').data[0][1],99999)
+})
+test('new gesture feedback follows event sequence, never a retained first event or a reconnect', () => {
+  const state=(sequence,code=2,session='a',firmware='V2')=>({session,firmware,gesture_event:{sequence,code}})
+  assert.equal(fd2Presentation.isNewFd2Gesture?.(state(10),state(11),true),true)
+  assert.equal(fd2Presentation.isNewFd2Gesture(undefined,state(11),true),false)
+  assert.equal(fd2Presentation.isNewFd2Gesture(state(10),state(10),true),false)
+  assert.equal(fd2Presentation.isNewFd2Gesture(state(10),state(11,2,'b'),true),false)
+  assert.equal(fd2Presentation.isNewFd2Gesture(state(10),state(11),false),false)
+  assert.equal(fd2Presentation.isNewFd2Gesture(state(10),state(11,0),true),false)
+  assert.equal(fd2Presentation.isNewFd2Gesture(state(10),state(0),true),false)
+  assert.equal(fd2Presentation.isNewFd2Gesture(state(10),state(11,2,'a','V5'),true),false)
+})
+test('motion labels preserve all six firmware preset identities and never treat ACK as completion', () => {
+  assert.equal(fd2Presentation.fd2MotionLabel?.(0x11),'相对定位 60°')
+  assert.equal(fd2Presentation.fd2MotionLabel(0x16),'相对定位 360°')
+  assert.equal(fd2Presentation.fd2MotionLabel(0x21),'正弦往返')
+  assert.equal(fd2Presentation.fd2MotionLabel(0x26),'扫频往返')
+  assert.equal(fd2Presentation.fd2MotionLabel(null),'—')
+  assert.equal(fd2Presentation.fd2MotionLabel(99),'动作 99')
+  assert.deepEqual(fd2Presentation.fd2PositionPresets.map(p=>p.value),[1,2,3,4,5,6])
+  assert.deepEqual(fd2Presentation.fd2TrajectoryPresets.map(p=>p.value),[1,2,3,4,5,6])
+})
+
+test('3D prefers a real unclipped pose, and never turns a clipped control angle into an inferred down pose',()=>{
+  assert.equal(fd2Presentation.fd2TwinAngle?.({pendulum_pose_deg:179.99,angle_deg:85.0708,angle_display_limited:true}),179.99)
+  assert.equal(fd2Presentation.fd2TwinAngle({pendulum_pose_deg:null,angle_deg:85.0708,angle_display_limited:true}),null)
+  assert.equal(fd2Presentation.fd2TwinAngle({pendulum_pose_deg:null,angle_deg:-.084}),null)
+  assert.equal(fd2Presentation.fd2TwinAngle({pendulum_pose_deg:NaN,angle_deg:0}),null)
+  assert.equal(fd2Presentation.fd2TwinAngle({angle_deg:-.084}),-.084)
+  assert.equal(fd2Presentation.fd2TwinAngle({angle_deg:null}),null)
+})
+
+test('fault 1 is angle protection and is distinct from the ADC OTR fault',()=>{
+  assert.equal(fd2Presentation.fd2FaultLabel?.(1),'角度越界保护（1）')
+  assert.equal(fd2Presentation.fd2FaultLabel(4),'ADC 越量程保护（4）')
+  assert.equal(fd2Presentation.fd2FaultLabel(99),'未知故障（99）')
+})

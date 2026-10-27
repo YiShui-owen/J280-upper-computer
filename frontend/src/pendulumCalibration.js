@@ -3,7 +3,9 @@ const wrap360 = degrees => ((degrees % 360) + 360) % 360
 const finite = (value, fallback) => Number.isFinite(value) ? value : fallback
 
 export function calibrationStorageKey(firmware) {
-  return `j280:twin3d:calibration:v2:${['SG21','SA21','SP24','V1','V2','V3','V4','V5'].includes(firmware) ? firmware : 'generic'}`
+  // FD2 now uses unclipped Q4 pose angles; retain old profiles without applying their old input domain.
+  const version = /^V[1-5]$/.test(firmware || '') ? 'v3' : 'v2'
+  return `j280:twin3d:calibration:${version}:${['SG21','SA21','SP24','V1','V2','V3','V4','V5'].includes(firmware) ? firmware : 'generic'}`
 }
 
 export function calibrationDefaults(firmware) {

@@ -2,6 +2,10 @@
 
 来源：用户于 2026-10-25 交付的 `J280_V5_Standalone_20261025(1).zip`。`SOURCE.json` 记录归档 SHA256；`MANIFEST_SHA256.json` 逐文件记录大小及 SHA256。`upstream/host/` 与 `upstream/runtime/` 是归档对应前缀的原字节文件，没有修改控制、协议或参数。归档其他路径不执行、不导入。
 
+2026-10-27 已核验用户新交付 `J280_V1_V2_V5_Complete_20261027.zip`：每版 `Code_and_Host/host/` 的 203 项及 `runtime/` 的 2047 项都与当前清单逐字节相同。保留实际导入的旧来源，在 `SOURCE.json` 的 `compatible_deliveries` 记录新来源；原始说明、来源、总清单、三版 VERSION/native 摘要及核验结果保存在 [releases/20261027](releases/20261027/IMPORT_VALIDATION.json)。本次无需覆盖原样 Host/runtime 或改变协议适配。
+
+V1/V2 新位流修复起摆转平衡的当前位置锚定与完整新帧资格，V5 使用现有 A25 源码重新编译。现场 V1/V2/V5 文件已更新，V3/V4 保留原版，详情见 [更新记录](../../docs/fd2-update-20261027.md)。三版 firmware/schema/wire 与旧交付相同，上位机识别版本不等于识别该次构建，也不能据此确认硬件已刷写。
+
 原样依赖与外层适配分开：`../fd2_bridge.py` 观察原 Host 已接受的 coherent T 与独立 D，提供 loopback HTTP 及显式一次性命令；`../fd2_replay.py` 使用原 `trace_log.iter_chunks` 验证原生日志、按物理时间 RX-only 回放。回放绝不启动串口 owner 线程或解释 TX 为命令；ACK 不进入可能安排读回的原接收分支。
 
 |版本|完整 firmware / schema|wire|能力|

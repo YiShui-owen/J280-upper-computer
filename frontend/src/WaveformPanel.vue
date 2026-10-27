@@ -20,6 +20,8 @@ const props = defineProps({
   layout: { type: String, default: 'stacked' },
   firmware: { type: String, default: '' },
   originCount: { type: String, default: '' },
+  session: { type: String, default: '' },
+  angleExtent: { type: Number, default: 30 },
 })
 const emit = defineEmits(['window-change'])
 const windowMs = ref(10000)
@@ -30,6 +32,13 @@ let observer = null
 let frame = null
 let pointer = null
 let preciseMode = null
+let fd2Axes = {}
+
+function resetScale() {
+  fd2Axes = {}
+  scheduleRender()
+}
+defineExpose({resetScale})
 
 function trackPointer(event) {
   pointer = { clientX:event.clientX, clientY:event.clientY }
@@ -61,7 +70,11 @@ function render() {
   if (preciseMode !== null && preciseMode !== precise) chart.clear()
   preciseMode = precise
   const createOption = fd2 ? createFd2WaveformOption : precise ? createPreciseWaveformOption : createWaveformOption
-  const option = createOption(props.samples, props.now, chart.getHeight(), props.events, chart.getWidth(), windowMs.value, props.layout)
+  const option = createOption(props.samples, props.now, chart.getHeight(), props.events, chart.getWidth(), windowMs.value, props.layout,
+    {previousAxes:fd2Axes[windowMs.value] || [], angleExtent:props.angleExtent})
+  if (fd2) fd2Axes[windowMs.value] = option.yAxis.map((axis,i) =>
+    option.series.some(line => line.yAxisIndex === i && line.data.some(point => Number.isFinite(point[1])))
+      ? axis : fd2Axes[windowMs.value]?.[i])
   const originCount = props.originCount
   if (precise && /^-?\d+$/.test(originCount)) {
     const formatter = option.tooltip.formatter
@@ -83,6 +96,11 @@ function scheduleRender() {
 
 // The parent supplies fresh snapshots, so a shallow watch avoids traversing all telemetry every update.
 watch(() => [props.samples, props.now, props.events, props.layout, props.firmware, props.originCount, windowMs.value], scheduleRender)
+watch(() => [props.firmware, props.session], resetScale)
+watch(() => props.angleExtent, () => {
+  for (const axes of Object.values(fd2Axes)) axes[0] = undefined
+  scheduleRender()
+})
 
 onMounted(() => {
   chart = echarts.init(chartRef.value)

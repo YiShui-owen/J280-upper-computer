@@ -16,6 +16,7 @@
     <section class="console-statusbar" aria-label="独立连接状态与模型工况">
       <div class="link-states">
           <span :class="{live:statusOnline}"><i></i>倒立摆：{{ state.replay?.active ? `离线回放 ${state.firmware || ''}${state.replay.finished ? ' · 已结束' : ''}` : statusOnline ? `${state.firmware} 已连接` : state.host_online ? '等待状态读回' : '未连接' }}</span>
+          <span v-if="isFd2(state.firmware) && !state.replay?.active" class="fd2-links">USB {{ statusOnline && state.transport?.usb_connected ? '已连接' : '未连接' }} · BT10 {{ statusOnline && state.transport?.ble_connected ? '已连接' : '未连接' }}</span>
           <span v-if="state.firmware === 'SP24' && !precisionFresh" class="precision-stale">精确遥测{{ state.precision?.available === false ? '接口未就绪' : '陈旧／等待' }}</span>
         <span v-if="hostControls?.runRequest" class="run-request-status" role="status">{{ ['V3','V5'].includes(state.firmware) ? '平衡请求' : '起摆请求' }}：{{ requestLabel(hostControls.runRequest) }}</span>
         <template v-if="sceneMode === 'car'">
@@ -49,22 +50,24 @@
           ref="digitalTwin"
           :scene-mode="sceneMode"
           :firmware="state.firmware || ''"
+          :session="state.session || ''"
           :arm-angle="angleOnline ? periodicArm(state.arm_angle_deg) : null"
-          :pendulum-angle="angleOnline ? state.angle_deg : null"
+          :pendulum-angle="modelPendulumAngle"
           :mode="statusOnline ? state.mode_name : 'WAITING'"
           :sample-time="state.angle_received_at || state.observed_at"
           :sample-tick="state.fpga_time_ms ?? null"
           :arm-velocity="state.arm_velocity_deg_s"
           :pendulum-velocity="state.angle_velocity_deg_s"
+          :pwm-percent="pwmOnline ? state.duty_actual_percent : null"
           :loaded="loadMode === 'loaded'"
         />
         </div>
-        <div v-if="!angleOnline" class="model-caption" title="暂无摆角遥测；模型保持示意姿态，旋臂角度未标定。"><span>暂无摆角数据</span></div>
+        <div v-if="!Number.isFinite(modelPendulumAngle)" class="model-caption" title="没有有效姿态数据时，模型保留上一姿态。"><span>{{ angleOnline && state.angle_display_limited ? '摆角超出量程，姿态暂不可用' : '暂无摆角数据' }}</span></div>
         <dl v-if="sceneMode === 'car' && online" class="car-pendulum-summary" aria-label="倒立摆实时反馈">
           <div v-for="metric in visibleMetrics" :key="metric.key"><dt>{{ metric.label }}</dt><dd>{{ metric.value }} {{ metric.unit }}</dd></div>
         </dl>
       </section>
-      <Fd2FeaturePanel v-if="sceneMode === 'bench'" :state="hostState" :samples="chartSamples" :now="chartNow" />
+      <Fd2FeaturePanel v-if="sceneMode === 'bench'" :state="hostState" :samples="chartSamples" :now="chartNow" :controls="hostControls" />
       <aside v-else class="remote-panel" aria-label="车载遥控操作区">
         <header class="panel-heading"><h2>小车遥控</h2><span :class="['small-status',{live:carControl.enabled}]">{{ carControl.enabled ? '已启用' : '未启用' }}</span></header>
         <fieldset :disabled="state.replay?.active" class="car-replay-guard"><CarControlPanel :control="carControl" /></fieldset>
@@ -86,8 +89,8 @@
       </aside>
     </section>
     <section v-if="online || chartSamples.length" class="waveform-section console-waveforms" aria-label="摆控实时响应">
-      <header class="waveform-heading"><h2>摆控波形</h2><div class="waveform-tools"><details v-if="state.firmware === 'SP24'" class="precision-details"><summary>{{ fmt(state.precision?.received_hz,1) }} Hz<span v-if="state.precision?.recording_error || state.precision?.recording_lost_rows" class="precision-alert">记录异常</span></summary><div class="precision-summary"><p>{{ precisionSummary }}</p><p>记录错误：{{ state.precision?.recording_error || '无' }}；未记录 {{ state.precision?.recording_lost_rows ?? '--' }} 行</p></div></details><button class="text-button" @click="exportSamples">导出当前缓存</button><span title="悬停查看 120 秒，移开恢复 10 秒">{{ waveformWindowMs / 1000 }} 秒</span></div></header>
-      <WaveformPanel layout="horizontal" :firmware="state.firmware || ''" :origin-count="state.precision?.origin_count || ''" :samples="chartSamples" :now="chartNow" :events="events" @window-change="waveformWindowMs = $event" />
+      <header class="waveform-heading"><h2>摆控波形</h2><div class="waveform-tools"><template v-if="isFd2(state.firmware)"><label class="waveform-range">摆角量程 <select v-model.number="angleExtent" aria-label="摆角最小量程"><option :value="30">±30°</option><option :value="60">±60°</option></select></label><button class="text-button" title="按当前窗口重置；超出范围时自动扩展，之后保持量程" @click="waveform?.resetScale()">重置量程</button></template><details v-if="state.firmware === 'SP24'" class="precision-details"><summary>{{ fmt(state.precision?.received_hz,1) }} Hz<span v-if="state.precision?.recording_error || state.precision?.recording_lost_rows" class="precision-alert">记录异常</span></summary><div class="precision-summary"><p>{{ precisionSummary }}</p><p>记录错误：{{ state.precision?.recording_error || '无' }}；未记录 {{ state.precision?.recording_lost_rows ?? '--' }} 行</p></div></details><button class="text-button" @click="exportSamples">导出当前缓存</button><span title="悬停查看 120 秒，移开恢复 10 秒">{{ waveformWindowMs / 1000 }} 秒</span></div></header>
+      <WaveformPanel ref="waveform" layout="horizontal" :firmware="state.firmware || ''" :session="state.session || ''" :angle-extent="angleExtent" :origin-count="state.precision?.origin_count || ''" :samples="chartSamples" :now="chartNow" :events="events" @window-change="waveformWindowMs = $event" />
     </section>
 
     <dialog ref="settingsDialog" class="engineering-dialog" @click="closeOnBackdrop">
@@ -113,7 +116,7 @@ import CarControlPanel from './CarControlPanel.vue'
 import CarControlPad from './CarControlPad.vue'
 import Fd2ControlPanel from './Fd2ControlPanel.vue'
 import Fd2FeaturePanel from './Fd2FeaturePanel.vue'
-import { isFd2, appendFd2Samples, periodicArm, fd2Freshness, replayCacheNow, fd2RmsAngle } from './fd2Presentation.js'
+import { isFd2, appendFd2Samples, periodicArm, fd2Freshness, replayCacheNow, fd2RmsAngle,fd2TwinAngle } from './fd2Presentation.js'
 import GesturePanel from './GesturePanel.vue'
 import { useCarControl } from './useCarControl.js'
 import { pageFresh } from './gesturePresentation.js'
@@ -136,6 +139,8 @@ const samples = shallowRef([])
 const chartSamples = shallowRef([])
 const chartNow = ref(Date.now())
 const waveformWindowMs = ref(10000)
+const waveform = ref(null)
+const angleExtent = ref(30)
 const events = shallowRef([])
 const settingsDialog = ref(null)
 const digitalTwin = ref(null)
@@ -154,6 +159,7 @@ const precisionFresh=computed(()=>state.firmware !== 'SP24' || Boolean(state.pre
   Number.isFinite(state.precision.age_s) && state.precision.age_s + Math.max(0,clock.value/1000-Number(state.observed_at)) < .25))
 const fd2Fresh = computed(() => fd2Freshness(state,clock.value).control)
 const angleOnline = computed(() => isFd2(state.firmware) ? fd2Fresh.value : precisionFresh.value && pageFresh(state.angle_received_at, clock.value, statusOnline.value))
+const modelPendulumAngle = computed(() => angleOnline.value ? isFd2(state.firmware) ? fd2TwinAngle(state) : state.angle_deg : null)
 const pwmOnline = computed(() => isFd2(state.firmware) ? fd2Fresh.value : precisionFresh.value && pageFresh(state.arm_received_at, clock.value, statusOnline.value))
 const precisionSummary=computed(()=>{
   const p=state.precision || {}
