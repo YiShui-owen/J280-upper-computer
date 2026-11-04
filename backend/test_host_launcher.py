@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 
 LAUNCHER = Path(__file__).resolve().parents[1] / 'launch_host.py'
 
@@ -51,6 +52,54 @@ class HostLauncherTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn('--offline-preview', result.stdout)
                 self.assertIn('--headless', result.stdout)
+
+    def test_adb1_help_does_not_open_hardware(self):
+        result = subprocess.run([sys.executable, '-B', '-X', 'utf8', str(LAUNCHER), 'ADB1', '--help'],
+                                capture_output=True, text=True, encoding='utf-8', timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('--demo', result.stdout)
+        self.assertIn('--port', result.stdout)
+
+    def test_v4_ble_option_is_scoped_to_v4_and_works_headless(self):
+        for variant, expected in (('V4', 0), ('V3', 2)):
+            result = subprocess.run([sys.executable, '-B', '-X', 'utf8', str(LAUNCHER),
+                                     variant, '--v4-ble', '--headless', '--once', '--port', '0'],
+                                    capture_output=True, text=True, encoding='utf-8', timeout=10)
+            self.assertEqual(result.returncode, expected, result.stderr)
+            if expected == 0:
+                self.assertFalse(json.loads(result.stdout)['connected'])
+
+    def test_v4_ble_window_defaults_without_connecting(self):
+        from host.v4_ble import configure
+        class Var:
+            def __init__(self): self.value = None
+            def set(self, value): self.value = value
+            def __str__(self): return 'route-mode'
+        class Combo:
+            def winfo_children(self): return []
+            def cget(self, name): return 'route-mode'
+            def configure(self, **kwargs): self.values = kwargs['values']
+        class Notebook:
+            def winfo_children(self): return []
+            def tabs(self): return ['tab']
+            def tab(self, index, name): return '通信'
+            def select(self, index): self.selected = index
+        combo, notebook = Combo(), Notebook()
+        window = Mock()
+        window.winfo_children.return_value = [combo, notebook]
+        ui = Mock()
+        for name in ('route_mode', 'port', 'ble_address', 'identity', 'notice'):
+            setattr(ui, name, Var())
+        app = Mock(FIRMWARE={4:0x46443434}, SCHEMAS={4:0x46443404})
+        with patch.object(configure.ttk, 'Combobox', Combo), patch.object(configure.ttk, 'Notebook', Notebook), patch.object(configure, 'install') as install:
+            configure.configure_window(window, ui, app)
+        self.assertEqual(ui.route_mode.value, 'BLE')
+        self.assertEqual(ui.port.value, '')
+        self.assertEqual(ui.ble_address.value, configure.DEFAULT_ADDRESS)
+        self.assertEqual(combo.values, ('BLE', 'USB+BLE', 'USB'))
+        self.assertEqual(notebook.selected, 0)
+        install.assert_called_once_with(configure.DEFAULT_ADDRESS)
+        ui.connect.assert_not_called()
 
 
 if __name__ == '__main__':

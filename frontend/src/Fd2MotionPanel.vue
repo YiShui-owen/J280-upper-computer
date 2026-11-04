@@ -12,12 +12,14 @@
     </div>
     <p class="motion-hint">{{ tab==='position' ? '以本次实测位置为起点，相对转动。' : '有限次数结束后，返回本次原点并保持。' }}</p>
     <div class="motion-feedback" aria-live="polite">
-      <div class="motion-current"><span>设备动作</span><strong>{{ diagnosticFresh ? fd2MotionLabel(state.motion?.action) : '等待运动读回' }}</strong></div>
+      <div v-if="state.firmware==='V4_USB_BLE'" class="motion-current"><span>最近接受定位</span><strong>{{ v4LastPositionLabel(state.motion?.last_position_request) }}</strong></div>
+      <div v-else class="motion-current"><span>设备动作</span><strong>{{ diagnosticFresh ? fd2MotionLabel(state.motion?.action) : '等待运动读回' }}</strong></div>
       <p v-if="lastRequest" class="motion-request"><span>{{ requestName }}</span><span>{{ requestLabel(lastRequest) }}</span><button v-if="lastRequest.state==='indeterminate'" class="text-button" @click="controls.query(lastRequest)">查询结果</button></p>
       <p v-if="lastRequest?.message && ['rejected','failed','indeterminate'].includes(lastRequest.state)" class="motion-error" role="status">{{ lastRequest.message }}</p>
-      <dl class="motion-readings"><div><dt>跟踪误差</dt><dd>{{ degrees(state.motion?.tracking_error_deg) }}<small> °</small></dd></div><div><dt>实际速度</dt><dd>{{ degrees(state.motion?.measured_velocity_deg_s) }}<small> °/s</small></dd></div></dl>
+      <dl class="motion-readings"><div><dt>跟踪误差</dt><dd>{{ degrees(state.motion?.tracking_error_deg, state.firmware==='V4_USB_BLE' ? controlFresh : diagnosticFresh) }}<small> °</small></dd></div><div><dt>实际速度</dt><dd>{{ degrees(state.motion?.measured_velocity_deg_s) }}<small> °/s</small></dd></div></dl>
+      <p v-if="state.firmware==='V4_USB_BLE'" class="motion-hint">距最终目标 {{ remainingDegrees }}°（编码器实测）</p>
       <div class="motion-completion">
-        <span :class="{complete:diagnosticFresh && state.motion?.trajectory_done}"><i></i>参考{{ diagnosticFresh ? state.motion?.trajectory_done ? '完成' : '未完成' : '待读回' }}</span>
+        <span :class="{complete:diagnosticFresh && state.motion?.trajectory_done}"><i></i>参考{{ diagnosticFresh && typeof state.motion?.trajectory_done === 'boolean' ? state.motion.trajectory_done ? '完成' : '未完成' : '待读回' }}</span>
         <span :class="{complete:diagnosticFresh && state.motion?.tracking_settled}"><i></i>实际{{ diagnosticFresh ? state.motion?.tracking_settled ? '到位' : '未到位' : '待读回' }}</span>
       </div>
     </div>
@@ -30,12 +32,14 @@
 
 <script setup>
 import {computed,ref,watch} from 'vue'
-import {fd2PositionPresets,fd2TrajectoryPresets,fd2MotionLabel} from './fd2Presentation.js'
+import {fd2PositionPresets,fd2TrajectoryPresets,fd2MotionLabel,fd2Freshness,v4LastPositionLabel} from './fd2Presentation.js'
 import {requestLabel} from './hostPresentation.js'
 const props=defineProps({state:{type:Object,required:true},controls:Object,diagnosticFresh:Boolean})
 const tab=ref('position')
 watch([()=>props.state.firmware,()=>props.state.session],()=>{tab.value='position'})
 const presets=computed(()=>tab.value==='trajectory'?fd2TrajectoryPresets:fd2PositionPresets)
+const controlFresh=computed(()=>fd2Freshness(props.state,props.state.presentation_now_ms??Date.now()).control)
+const remainingDegrees=computed(()=>controlFresh.value && Number.isFinite(props.state.motion?.remaining_to_target_deg) ? props.state.motion.remaining_to_target_deg.toFixed(2) : '—')
 const lastRequest=computed(()=>props.controls?.records?.find(r=>r.host_session===props.state.session && r.host_firmware===props.state.firmware && ['position','trajectory','hold','zero'].includes(r.action)))
 const requestName=computed(()=>{
   const r=lastRequest.value
@@ -46,7 +50,7 @@ const requestName=computed(()=>{
 })
 function canSend(action){return Boolean(props.controls?.canSend(action))}
 function matchesRequest(value){return lastRequest.value?.action===tab.value && lastRequest.value?.value===value && !['rejected','failed','cancelled'].includes(lastRequest.value.state)}
-function degrees(value){return props.diagnosticFresh && Number.isFinite(value)?value.toFixed(2):'—'}
+function degrees(value,fresh=props.diagnosticFresh){return fresh && Number.isFinite(value)?value.toFixed(2):'—'}
 </script>
 
 <style scoped>

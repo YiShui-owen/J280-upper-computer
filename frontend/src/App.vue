@@ -9,16 +9,17 @@
       <div class="system-tools">
         <button class="text-button" @click="openSettings">参数与连接</button>
         <button class="button primary hardware-run" :disabled="!hostControls?.canRun" @click="hostControls?.run()">{{ hostControls?.runLabel || '启动摆控' }}</button>
+        <button v-if="['ADB1','ADB1_FASTP','ADB1_07'].includes(state.firmware)" class="button primary" :disabled="!hostControls?.canSend('balance')" @click="hostControls?.send('balance')">手动平衡</button>
         <button v-if="sceneMode === 'car'" class="button stop" :disabled="state.replay?.active || !carControl.status.connected" @click="carControl.stop()">停止小车</button>
-        <button class="button stop hardware-stop" :disabled="state.replay?.active" @click="hostControls?.stop()">停止摆控</button>
+        <button class="button stop hardware-stop" :disabled="state.replay?.active || (['ADB1','ADB1_FASTP','ADB1_07'].includes(state.firmware) && !hostControls?.canSend('stop'))" @click="hostControls?.stop()">停止摆控</button>
       </div>
     </header>
     <section class="console-statusbar" aria-label="独立连接状态与模型工况">
       <div class="link-states">
-          <span :class="{live:statusOnline}"><i></i>倒立摆：{{ state.replay?.active ? `离线回放 ${state.firmware || ''}${state.replay.finished ? ' · 已结束' : ''}` : statusOnline ? `${state.firmware} 已连接` : state.host_online ? '等待状态读回' : '未连接' }}</span>
-          <span v-if="isFd2(state.firmware) && !state.replay?.active" class="fd2-links">USB {{ statusOnline && state.transport?.usb_connected ? '已连接' : '未连接' }} · BT10 {{ statusOnline && state.transport?.ble_connected ? '已连接' : '未连接' }}</span>
+          <span :class="{live:statusOnline}"><i></i>倒立摆：{{ state.replay?.active ? `${state.replay.label || '离线回放'} ${state.firmware || ''}${state.replay.finished ? ' · 已结束' : ''}` : statusOnline ? `${state.firmware} 已连接` : state.host_online ? '等待状态读回' : '未连接' }}</span>
+          <span v-if="isFd2(state.firmware) && !state.replay?.active" class="fd2-links">USB {{ state.firmware === 'V4_USB_BLE' ? dualLinkLabel(state,'usb',clock) : (statusOnline && state.transport?.usb_connected ? '已连接' : '未连接') }} · BT10 {{ state.firmware === 'V4_USB_BLE' ? dualLinkLabel(state,'ble',clock) : (statusOnline && state.transport?.ble_connected ? '已连接' : '未连接') }}</span>
           <span v-if="state.firmware === 'SP24' && !precisionFresh" class="precision-stale">精确遥测{{ state.precision?.available === false ? '接口未就绪' : '陈旧／等待' }}</span>
-        <span v-if="hostControls?.runRequest" class="run-request-status" role="status">{{ ['V3','V5'].includes(state.firmware) ? '平衡请求' : '起摆请求' }}：{{ requestLabel(hostControls.runRequest) }}</span>
+        <span v-if="hostControls?.runRequest" class="run-request-status" role="status">{{ hostControls.runRequest.action === 'balance' ? '平衡请求' : '起摆请求' }}：{{ requestLabel(hostControls.runRequest) }}</span>
         <template v-if="sceneMode === 'car'">
           <span :class="{live:carControl.status.connected && carControl.apiOnline}"><i></i>遥控链路：{{ carControl.apiOnline && carControl.status.connected ? 'BLE 已验证' : '未连接' }}</span>
           <span :class="{live:!!carControl.feedback}"><i></i>车辆反馈：{{ carControl.feedback ? '已收到' : '暂无' }}</span>
@@ -32,7 +33,7 @@
         </div>
       </div>
     </section>
-    <section class="console-workspace">
+    <section class="console-workspace" :class="{ 'g3-workspace': sceneMode === 'bench' && state.firmware === 'G3_C1' }">
       <aside v-if="sceneMode === 'bench'" class="bench-instruments" aria-label="摆控真实读数">
         <header class="panel-heading"><h2>摆控数据</h2><span :class="['system-state', modeClass]">{{ modeLabel }}</span></header>
         <dl v-if="online" class="readouts bench-readouts">
@@ -59,6 +60,7 @@
           :arm-velocity="state.arm_velocity_deg_s"
           :pendulum-velocity="state.angle_velocity_deg_s"
           :pwm-percent="pwmOnline ? state.duty_actual_percent : null"
+          :drawing-active="ds13Drawing"
           :loaded="loadMode === 'loaded'"
         />
         </div>
@@ -73,6 +75,7 @@
         <fieldset :disabled="state.replay?.active" class="car-replay-guard"><CarControlPanel :control="carControl" /></fieldset>
         <div class="remote-enable"><button class="button primary" :disabled="state.replay?.active || !carControl.canEnable || carControl.enabled" @click="enableRemote">{{ carControl.enabled ? '遥控已启用' : '启用遥控' }}</button></div>
         <CarControlPad :enabled="carControl.enabled && !state.replay?.active" :connected="carControl.status.connected && !state.replay?.active" :held="carControl.held" @press="carControl.press" @release="carControl.release" @stop="carControl.stop()" />
+        <div class="car-v83-actions"><button class="button primary" aria-label="急加速" :disabled="state.replay?.active || !carControl.canBoost" @click="carControl.boost()">急加速 · Shift</button><button class="button stop" aria-label="急刹" :disabled="state.replay?.active || !carControl.status.connected" @click="carControl.brake()">急刹 · 空格</button></div>
         <p class="remote-sequence">按住行驶，松开停止</p>
         <p v-if="carControl.notice" class="remote-notice" role="status">{{ carControl.notice }}</p>
         <p v-if="carControl.apiError || carControl.error || carControl.status.error" class="host-error" role="alert">{{ carControl.apiError || carControl.error || carControl.status.error }}</p>
@@ -80,15 +83,19 @@
           <header class="panel-heading"><h3>车辆反馈</h3><span class="small-status">{{ carControl.feedback.active ? '驱动中' : '驱动已撤去' }}</span></header>
           <dl>
             <div><dt>左右 PWM</dt><dd>{{ fmt(carControl.feedback.left_pwm8400 / 84,1) }} / {{ fmt(carControl.feedback.right_pwm8400 / 84,1) }} %</dd></div>
-            <div><dt>左右轮计数</dt><dd>{{ carControl.feedback.left_count }} / {{ carControl.feedback.right_count }}</dd></div>
-            <div><dt>转向读回</dt><dd>{{ ({700:'向左',750:'回中',800:'向右'})[carControl.feedback.servo_compare] || '--' }}</dd></div>
+            <div><dt>目标 / 渐变目标</dt><dd>{{ fmt(carControl.feedback.requested_q8 / 256,2) }} / {{ fmt(carControl.feedback.ramped_q8 / 256,2) }} 计数/5ms</dd></div>
+            <div><dt>左右 5ms 编码器</dt><dd>{{ carControl.feedback.encoder_valid && carControl.feedback.left_delta5 != null ? carControl.feedback.left_delta5 : '--' }} / {{ carControl.feedback.encoder_valid && carControl.feedback.right_delta5 != null ? carControl.feedback.right_delta5 : '--' }}</dd></div>
+            <div><dt>轨迹 / 阶段</dt><dd>{{ carControl.feedback.route_id }} / {{ carControl.feedback.phase_id }}</dd></div>
+            <div><dt>左右轮计数</dt><dd>{{ carControl.feedback.encoder_valid && carControl.feedback.left_count != null ? carControl.feedback.left_count : '--' }} / {{ carControl.feedback.encoder_valid && carControl.feedback.right_count != null ? carControl.feedback.right_count : '--' }}</dd></div>
+            <div><dt>转向读回</dt><dd>{{ carControl.feedback.servo_compare }}</dd></div>
             <div><dt>停止原因码</dt><dd>{{ carControl.feedback.stop_reason }}</dd></div>
           </dl>
         </section>
-        <details class="operator-help car-help"><summary>操作说明</summary><div class="help-content"><p>先向左／向右打方向，再前进／后退。前轮舵机负责转向。</p><p><kbd>W</kbd> <kbd>↑</kbd> 前进　<kbd>S</kbd> <kbd>↓</kbd> 后退<br /><kbd>A</kbd> <kbd>←</kbd> 左转　<kbd>D</kbd> <kbd>→</kbd> 右转</p><p><kbd>空格</kbd> / <kbd>Esc</kbd> 停止并回正。切换场景、打开设置或离开窗口会取消遥控。</p><p>BLE 蓝牙：WH-BLE102。连接后需手动启用遥控；连接和车辆反馈分别判断。</p></div></details>
+        <details class="operator-help car-help"><summary>操作说明</summary><div class="help-content"><p>先向左／向右打方向，再前进／后退。前轮舵机负责转向。</p><p><kbd>W</kbd> <kbd>↑</kbd> 前进　<kbd>S</kbd> <kbd>↓</kbd> 后退<br /><kbd>A</kbd> <kbd>←</kbd> 左转　<kbd>D</kbd> <kbd>→</kbd> 右转</p><p><kbd>Shift</kbd> 单次急加速（快速档、直行前进）；<kbd>空格</kbd> 急刹，<kbd>Esc</kbd> 停止并回正。<kbd>F8</kbd> 按住轨迹，可同时调速。切换场景、打开设置或离开窗口会取消遥控。</p><p>BLE 蓝牙：WH-BLE102。连接后需手动启用遥控；连接和车辆反馈分别判断。</p></div></details>
       </aside>
     </section>
-    <section v-if="online || chartSamples.length" class="waveform-section console-waveforms" aria-label="摆控实时响应">
+    <Ds13DrawPanel v-if="sceneMode === 'bench' && state.firmware === 'DS13'" :state="hostState" :samples="chartSamples" :active="true" @drawing-change="ds13Drawing = $event" />
+    <section v-else-if="online || chartSamples.length" class="waveform-section console-waveforms" aria-label="摆控实时响应">
       <header class="waveform-heading"><h2>摆控波形</h2><div class="waveform-tools"><template v-if="isFd2(state.firmware)"><label class="waveform-range">摆角量程 <select v-model.number="angleExtent" aria-label="摆角最小量程"><option :value="30">±30°</option><option :value="60">±60°</option></select></label><button class="text-button" title="按当前窗口重置；超出范围时自动扩展，之后保持量程" @click="waveform?.resetScale()">重置量程</button></template><details v-if="state.firmware === 'SP24'" class="precision-details"><summary>{{ fmt(state.precision?.received_hz,1) }} Hz<span v-if="state.precision?.recording_error || state.precision?.recording_lost_rows" class="precision-alert">记录异常</span></summary><div class="precision-summary"><p>{{ precisionSummary }}</p><p>记录错误：{{ state.precision?.recording_error || '无' }}；未记录 {{ state.precision?.recording_lost_rows ?? '--' }} 行</p></div></details><button class="text-button" @click="exportSamples">导出当前缓存</button><span title="悬停查看 120 秒，移开恢复 10 秒">{{ waveformWindowMs / 1000 }} 秒</span></div></header>
       <WaveformPanel ref="waveform" layout="horizontal" :firmware="state.firmware || ''" :session="state.session || ''" :angle-extent="angleExtent" :origin-count="state.precision?.origin_count || ''" :samples="chartSamples" :now="chartNow" :events="events" @window-change="waveformWindowMs = $event" />
     </section>
@@ -116,13 +123,15 @@ import CarControlPanel from './CarControlPanel.vue'
 import CarControlPad from './CarControlPad.vue'
 import Fd2ControlPanel from './Fd2ControlPanel.vue'
 import Fd2FeaturePanel from './Fd2FeaturePanel.vue'
-import { isFd2, appendFd2Samples, periodicArm, fd2Freshness, replayCacheNow, fd2RmsAngle,fd2TwinAngle } from './fd2Presentation.js'
+import Ds13DrawPanel from './Ds13DrawPanel.vue'
+import { isFd2, dualLinkLabel, appendFd2Samples, periodicArm, fd2Freshness, replayCacheNow, fd2RmsAngle,fd2TwinAngle } from './fd2Presentation.js'
+import { createDs13SampleCache } from './ds13SampleCache.js'
 import GesturePanel from './GesturePanel.vue'
 import { useCarControl } from './useCarControl.js'
 import { pageFresh } from './gesturePresentation.js'
 import { appendSamples, rmsAngle as calculateRms, requestLabel } from './hostPresentation.js'
 const sceneMode = ref('bench')
-const carControl = useCarControl()
+const carControl = useCarControl({isAllowed:() => sceneMode.value === 'car' && !state.replay?.active && !settingsDialog.value?.open})
 
 const API = 'http://127.0.0.1:8000'
 const WS = 'ws://127.0.0.1:8000/ws'
@@ -136,14 +145,16 @@ const state = reactive({
 })
 const hostControls=ref(null)
 const samples = shallowRef([])
+const ds13Cache = createDs13SampleCache()
 const chartSamples = shallowRef([])
 const chartNow = ref(Date.now())
 const waveformWindowMs = ref(10000)
 const waveform = ref(null)
-const angleExtent = ref(30)
+const angleExtent = ref(60)
 const events = shallowRef([])
 const settingsDialog = ref(null)
 const digitalTwin = ref(null)
+const ds13Drawing = ref(false)
 const loadMode = ref('unloaded')
 const clock = ref(Date.now())
 let eventId = 0
@@ -167,7 +178,7 @@ const precisionSummary=computed(()=>{
 })
 const online = computed(() => angleOnline.value || pwmOnline.value)
 const modeClass = computed(() => !statusOnline.value ? 'idle' : ({ BALANCE:'balance', SWING:'swing', FAULT:'fault', ZERO:'zero' }[state.mode_name] || 'idle'))
-const modeLabel = computed(() => state.replay?.active ? `回放 · ${state.mode_name || '等待'}` : !statusOnline.value ? '无新状态' : ({ BALANCE:'平衡', SWING:'起摆', FAULT:'故障', ZERO:'已抓零', ARMED:'就绪', IDLE:'待机' }[state.mode_name] || '待机'))
+const modeLabel = computed(() => state.replay?.active ? `${state.replay.label || '回放'} · ${state.mode_name || '等待'}` : !statusOnline.value ? '无新状态' : ({ BALANCE:'平衡', SWING:'起摆', FAULT:'故障', ZERO:'已抓零', ARMED:'就绪', IDLE:'待机' }[state.mode_name] || '待机'))
 const rmsAngle = computed(() => isFd2(state.firmware) ? fd2RmsAngle(samples.value,chartNow.value) : calculateRms(samples.value,Math.max(clock.value,Date.now())))
 // Field definitions keep the presentation independent of a particular mechanism.
 const metrics = computed(() => [
@@ -214,7 +225,8 @@ function scheduleCharts(){
     const now = state.replay?.active && samples.value.length
       ? Math.max(...samples.value.map(row => (row.plot_at ?? row.received_at) * 1000)) : Date.now()
     const cacheNow = replayCacheNow(state, samples.value, now)
-    const retained = samples.value.filter(sample => sample.received_at * 1000 >= cacheNow - HISTORY_MS)
+    const retained = state.firmware === 'DS13' && !state.replay?.active
+      ? ds13Cache.prune(cacheNow) : samples.value.filter(sample => sample.received_at * 1000 >= cacheNow - HISTORY_MS)
     const changed = chartDataDirty || retained.length !== samples.value.length
     if (changed) {
       samples.value = retained
@@ -229,12 +241,20 @@ function scheduleCharts(){
 function applyTelemetry(data, rows = [], reset = false){
   if (!data || typeof data !== 'object') return
   if (data.observed_at && data.observed_at < state.observed_at) return
+  const previousDs13 = state.firmware === 'DS13' && !state.replay?.active
+  const previousSession = state.session
+  const enteringReplay = data.replay?.active && !state.replay?.active
   Object.assign(state, data)
   // 遥测可早于下一次 500 ms 定时刷新到达，必须同步推进新鲜度判断的本机时钟。
   clock.value = Date.now()
-  if (data.replay?.active && carControl.enabled) void carControl.deactivate('离线回放禁用遥控')
+  if (enteringReplay) void carControl.deactivate('离线回放禁用遥控')
   const previousSamples = samples.value
-  samples.value=isFd2(data.firmware)?appendFd2Samples(samples.value,rows,replayCacheNow(state,[...(reset?[]:samples.value),...rows]),reset):appendSamples(samples.value,rows,Date.now(),reset)
+  if(data.firmware === 'DS13' && !state.replay?.active){
+    samples.value=ds13Cache.append(rows,Date.now(),reset || !previousDs13 || previousSession!==data.session)
+  }else{
+    if(previousDs13)ds13Cache.clear()
+    samples.value=isFd2(data.firmware)?appendFd2Samples(samples.value,rows,replayCacheNow(state,[...(reset?[]:samples.value),...rows]),reset):appendSamples(samples.value,rows,Date.now(),reset)
+  }
   if (reset || samples.value.length !== previousSamples.length || samples.value.some((row,i)=>row!==previousSamples[i])) chartDataDirty = true
   if(reset)events.value=[]
   scheduleCharts()

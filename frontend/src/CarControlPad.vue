@@ -6,7 +6,7 @@
       @keydown="buttonKeyDown($event,key.action)" @keyup="buttonKeyUp" @blur="buttonBlur">
       <svg class="direction-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg><span>{{ key.short }}</span>
     </button>
-    <button class="button stop car-pad-stop" :disabled="!connected" title="停止小车并回正 · 空格 / Esc" aria-label="停止小车并回正" @click="$emit('stop')"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1" /></svg><span>停止小车</span></button>
+    <button class="button stop car-pad-stop" :disabled="!connected" title="停止小车并回正 · Esc" aria-label="停止小车并回正" @click="$emit('stop')"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1" /></svg><span>停止小车</span></button>
   </div>
 </template>
 <script setup>

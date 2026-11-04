@@ -64,7 +64,7 @@ function displayAxis(series, group, previous, angleExtent) {
   const padding = Math.max(20, (high - low) * .08)
   const min = Math.min(low - padding, previous?.min ?? Infinity)
   const max = Math.max(high + padding, previous?.max ?? -Infinity)
-  const interval = 180 * 2 ** Math.max(0, Math.ceil(Math.log2((max - min) / 720)))
+  const interval = 30 * 2 ** Math.max(0, Math.ceil(Math.log2((max - min) / 120)))
   const center = Math.round((min + max) / 2 / interval) * interval
   return {
     min:Math.min(center - 2 * interval, Math.floor(min / interval) * interval),
@@ -72,7 +72,7 @@ function displayAxis(series, group, previous, angleExtent) {
   }
 }
 
-export function createFd2WaveformOption(samples, now, height = 500, events = [], width = 600, windowMs = 10000, layout = 'stacked', {previousAxes = [], angleExtent = 30} = {}) {
+export function createFd2WaveformOption(samples, now, height = 500, events = [], width = 600, windowMs = 10000, layout = 'stacked', {previousAxes = [], angleExtent = 60} = {}) {
   const option = createWaveformOption([], now, height, [], width, 10000, layout)
   const start = now - windowMs
   option.xAxis.forEach(axis => { axis.min = start; axis.max = now; axis.interval = windowMs / 5 })

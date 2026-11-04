@@ -40,4 +40,5 @@ test('断流或 Host 会话变化将失联的待确认操作标为未知，保�
   const disconnected=reconcileRequest(record,{status_fresh:false,session:'old',firmware:'SG21',requests:{}})
   assert.equal(disconnected.state,'indeterminate')
   assert.equal(reconcileRequest(record,{status_fresh:true,session:'old',firmware:'SG21',requests:{'same-id':{state:'verified'}}}).state,'verified')
+  assert.equal(reconcileRequest(record,{status_fresh:true,session:'new',firmware:'SG21',requests:{'same-id':{state:'verified'}}}).state,'indeterminate')
 })

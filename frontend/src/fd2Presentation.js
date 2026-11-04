@@ -1,4 +1,16 @@
-export const isFd2 = firmware => /^V[1-5]$/.test(firmware || '')
+export const isFd2 = firmware => /^(?:V[1-5]|ADB1|ADB1_FASTP|ADB1_07|V4_R28|V4_USB_BLE|G3_C1|DS13)$/.test(firmware || '')
+export function v4LastPositionLabel(request) {
+ if (!Number.isInteger(request?.value) || request.value < 1 || request.value > 6) return '尚无已确认的位置指令'
+ const route = request.route === 'ble' ? '蓝牙' : request.route === 'usb' ? 'USB' : '未知链路'
+ return `${request.value * 60}° `
+}
+export function dualLinkLabel(state, route, now = Date.now()) {
+ const age = now / 1000 - state.observed_at
+ if (!state.host_online || !Number.isFinite(age) || age < 0 || age > 1) return '状态未知'
+ if (route === 'ble' && state.transport?.ble_quarantined) return state.transport?.usb_ready ? '异常，位置改走USB' : '异常，请确认USB'
+ if (!state.transport?.[`${route}_connected`]) return '未连接'
+ return state.transport?.[`${route}_ready`] ? '有回包' : '等待回包'
+}
 export function fd2TwinAngle(state) {
  if(Object.hasOwn(state,'pendulum_pose_deg'))return Number.isFinite(state.pendulum_pose_deg) ? state.pendulum_pose_deg : null
  // Older snapshots can still display in-range control angles. A clipped endpoint has no recoverable pose.
@@ -10,10 +22,12 @@ export function fd2FaultLabel(value) {
 }
 export function fd2Actions(firmware) {
  const common=['stop','estop','zero','balance','clear-fault']
- if (['V1','V2','V4'].includes(firmware)) common.push('start-swing')
- if(firmware==='V3') common.push('adapt-enable','adapt-disable')
- if(['V4','V5'].includes(firmware)) common.push('position','hold')
+ if (['V1','V2','V4','ADB1','ADB1_FASTP','ADB1_07'].includes(firmware)) common.push('start-swing')
+ if(['V3','ADB1','ADB1_FASTP','ADB1_07'].includes(firmware)) common.push('adapt-enable','adapt-disable')
+ if(['V4','V5','V4_R28','V4_USB_BLE'].includes(firmware)) common.push('position','hold')
  if(firmware==='V5') common.push('trajectory')
+ if(['ADB1_FASTP','ADB1_07','V4_R28','V4_USB_BLE'].includes(firmware)) common.push('read-gains','set-gains')
+ if(firmware==='G3_C1') common.push('play-c1','cancel-c1')
  return common
 }
 
@@ -27,6 +41,11 @@ return true})}
 export function periodicArm(value){return Number.isFinite(value)?((value+180)%360+360)%360-180:null}
 
 export const gestureLabels={0:'无',1:'右滑',2:'左滑',3:'上滑',4:'下滑',5:'靠近',6:'远离',7:'顺时针',8:'逆时针',9:'挥手STOP'}
+export function gestureEventLabel(firmware, code) {
+  if (['ADB1','ADB1_FASTP','ADB1_07'].includes(firmware) && code === 4) return '下滑STOP'
+  if (['ADB1','ADB1_FASTP','ADB1_07'].includes(firmware) && code === 9) return '挥手（无停止动作）'
+  return gestureLabels[code] ?? '—'
+}
 
 export const fd2PositionPresets = Array.from({length:6}, (_,i) => ({value:i+1, label:`${(i+1)*60}°`}))
 export const fd2TrajectoryPresets = [
@@ -36,7 +55,7 @@ export const fd2TrajectoryPresets = [
 
 export function isNewFd2Gesture(previous, current, controlFresh) {
   const event = current.gesture_event
-  return Boolean(controlFresh && ['V1','V2'].includes(current.firmware) && previous &&
+  return Boolean(controlFresh && ['V1','V2','ADB1','ADB1_FASTP','ADB1_07'].includes(current.firmware) && previous &&
     previous.session === current.session && previous.firmware === current.firmware &&
     Number.isInteger(previous.gesture_event?.sequence) && Number.isInteger(event?.sequence) &&
     event.sequence > 0 && event.sequence !== previous.gesture_event.sequence &&
@@ -58,7 +77,7 @@ return w?{kp:w.kp,kd:w.kd,coverage:Math.min(1,w.covered_ms/windowMs)}:{kp:null,k
 export function canFd2Command(state,action,now=Date.now()){if(state.replay?.active||!isFd2(state.firmware)||!fd2Actions(state.firmware).includes(action))return false;
 if(['stop','estop'].includes(action))return Boolean(state.host_online);
 const fresh=fd2Freshness(state,now);
-return fresh.status&&(!['position','trajectory'].includes(action)||fresh.control)}
+return fresh.status&&(!['position','trajectory','play-c1'].includes(action)||fresh.control)}
 
 export function fd2Freshness(state,now=Date.now()){
  const elapsed=Math.max(0,now/1000-Number(state.observed_at)),replay=Boolean(state.replay?.active)

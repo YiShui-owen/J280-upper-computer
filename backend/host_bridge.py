@@ -63,13 +63,13 @@ def validate_config(config):
         raise BridgeError('配置仅接受 bridge_port 和 firmware_variant')
     port=config.get('bridge_port',8371)
     variant=config.get('firmware_variant','auto')
-    if integer(port,1024,65535) is None or variant not in ('auto','V1','V2','V3','V4','V5','SG21','SA21','SP24'):
+    if integer(port,1024,65535) is None or variant not in ('auto','V1','V2','V3','V4','V5','ADB1','SG21','SA21','SP24',*fd2_telemetry.DELIVERY_PROFILES):
         raise BridgeError('本机桥端口须为 1024..65535，版本须为 auto / V1～V5')
     return dict(bridge_port=port,firmware_variant=variant)
 
 
 def validate_action(body,snapshot,expected='auto'):
-    if not isinstance(body,dict) or set(body)-{'action','request_id','name','value'}:
+    if not isinstance(body,dict) or set(body)-{'action','request_id','name','value','session','stroke_id','seq','target','issued_ms'}:
         raise BridgeError('命令字段无效')
     action=body.get('action')
     variant=identify(snapshot,'auto' if action in ('stop','estop') else expected)
@@ -78,6 +78,8 @@ def validate_action(body,snapshot,expected='auto'):
             return fd2_telemetry.validate_action(body,snapshot)
         except ValueError as exc:
             raise BridgeError(str(exc)) from exc
+    if set(body)-{'action','request_id','name','value'}:
+        raise BridgeError('命令字段无效')
     if action not in ('stop','run','zero','clear-fault','balance','set','restore-pid','load-profile','apply-preset'):
         raise BridgeError('操作不受支持；串口连接请使用配套 Host')
     rid=body.get('request_id')
@@ -129,6 +131,7 @@ class HostClient:
     def __init__(self,port=8371,timeout=1.0):
         validate_config({'bridge_port':port})
         self.base=f'http://127.0.0.1:{port}'
+        self.port=port
         self.timeout=timeout
         self.opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -147,12 +150,15 @@ class HostClient:
             if not isinstance(value,dict): raise BridgeError('Host 返回的数据不是对象')
             return value
         except urllib.error.HTTPError as exc:
+            code=None
             try:
-                detail=json.loads(exc.read(4096)).get('error',str(exc))
+                response=json.loads(exc.read(4096))
+                detail=response.get('error',str(exc));code=response.get('code')
             except (ValueError,AttributeError): detail=str(exc)
             finally: exc.close()
             error = BridgeError(f'Host 拒绝请求：{detail}')
             error.request_rejected = exc.code in (400, 403, 404, 409, 422)
+            if isinstance(code,str): error.code=code
             raise error from exc
         except (OSError,ValueError) as exc:
             if isinstance(exc,BridgeError): raise
@@ -166,6 +172,12 @@ class HostClient:
         if after is not None: query['after']=after
         if stream is not None: query['stream']=stream
         return self.exchange('/waveform?'+urllib.parse.urlencode(query))
+
+    def gowin(self,after=None,stream=None):
+        query={'limit':512}
+        if after is not None: query['after']=after
+        if stream is not None: query['stream']=stream
+        return self.exchange('/gowin?'+urllib.parse.urlencode(query))
 
 
 def empty_state():

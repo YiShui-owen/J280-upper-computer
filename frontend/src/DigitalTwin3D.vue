@@ -6,7 +6,7 @@
       <button v-if="calibrationOpen" type="button" @click="calibrationOpen = false">关闭标定</button>
     </div>
     <section v-if="calibrationOpen" class="twin3d-calibration" aria-label="姿态标定" @change="normalizeCalibration">
-      <div class="calibration-heading"><b>姿态标定</b><span>仅调整 3D 映射</span></div>
+      <div class="calibration-heading"><b>姿态标定</b><span v-if="!isFd2(calibrationProfile)">仅调整 3D 映射</span></div>
       <label>θ 方向
         <select v-model.number="calibration.thetaDirection"><option :value="1">+1</option><option :value="-1">−1</option></select>
       </label>
@@ -19,33 +19,39 @@
       <template v-if="calibration.alphaTwoPointEnabled">
         <label>竖直向上读数 (°)<input v-model.number="calibration.alphaUprightDeg" type="number" step="0.001" /></label>
         <label>自然下垂读数 (°)<input v-model.number="calibration.alphaDownDeg" type="number" step="0.001" /></label>
-        <p v-if="!alphaReferencesValid(calibration)" role="status">两参考点的最短夹角须至少为 90°；当前暂用原始角度映射。</p>
-        <p>两点校正后再应用 α direction / offset。参考读数可微调；关闭后恢复原始角度映射。</p>
+        <p v-if="!alphaReferencesValid(calibration)" role="status">{{ isFd2(calibrationProfile) ? '参考点夹角须至少为 90°，两点标定未生效。' : '两参考点的最短夹角须至少为 90°；当前暂用原始角度映射。' }}</p>
+        <p v-if="!isFd2(calibrationProfile)">两点校正后再应用 α direction / offset。参考读数可微调；关闭后恢复原始角度映射。</p>
       </template>
       <label>显示平滑 (秒)<input v-model.number="calibration.smoothing" type="number" min="0" max="0.05" step="0.005" /></label>
-      <p>0 = 关闭插值；两轴异常样本检查仍开启。参数自动保存在当前浏览器。</p>
-      <p>BALANCE 微动轻量平滑。没有角速度支持的突跳需连续样本确认，不因等待超时而放行。</p>
-      <p>模型零点：θ 沿 +X，α 竖直向上。</p>
+      <template v-if="!isFd2(calibrationProfile)">
+        <p>0 = 关闭插值；两轴异常样本检查仍开启。参数自动保存在当前浏览器。</p>
+        <p>BALANCE 微动轻量平滑。没有角速度支持的突跳需连续样本确认，不因等待超时而放行。</p>
+        <p>模型零点：θ 沿 +X，α 竖直向上。</p>
+      </template>
       <button type="button" @click="restoreCalibration">恢复默认标定</button>
     </section>
     <p v-if="modelError" class="twin3d-model-error" role="status">{{ modelError }}</p>
-    <p v-if="calibrationNotice" class="twin3d-display-note" role="status">{{ calibrationNotice }}</p>
+    <p v-if="modelPaused" class="twin3d-display-note" role="status">手绘中，模型暂停</p>
+    <p v-if="calibrationNotice && !isFd2(calibrationProfile)" class="twin3d-display-note" role="status">{{ calibrationNotice }}</p>
   </div>
 </template>
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { isFd2 } from './fd2Presentation.js'
+import { createDrawRenderBudget } from './drawRenderBudget.js'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
-import { mountPendulumModel, disposePendulumModel } from './pendulumModel.js'
-import { createPendulumLoad, updatePendulumLoadPose } from './pendulumLoad.js'
+import { disposePendulumModel } from './pendulumModel.js'
+import { mountAssembly } from './pendulumAssembly.js'
+import { createPendulumLoad } from './pendulumLoad.js'
 import { createBenchSupport, setSceneMode } from './pendulumScene.js'
 import { calibrationDefaults, calibrationStorageKey, normalizeCalibration as normalizeDisplayCalibration, alphaReferencesValid, displayAlphaDeg, calibrateDownPose } from './pendulumCalibration.js'
-import pendulumAssetMetadata from './assets/models/l-pendulum.meta.json' with { type:'json' }
+import pendulumAssetMetadata from './assets/models/ip570.meta.json' with { type:'json' }
 
-const pendulumAssetUrl = new URL('./assets/models/l-pendulum.glb',import.meta.url).href
+const pendulumAssetUrl = new URL('./assets/models/ip570.glb',import.meta.url).href
 
 const props = defineProps({
   sceneMode: { type:String, default:'bench' },
@@ -63,11 +69,14 @@ const props = defineProps({
   rightWheelCount: { type:Number, default:0 },
   steeringRequest: { type:Number, default:750 },
   loaded: { type:Boolean, default:false }, // 人工选择的 3D 外观，不代表实际负载检测。
+  drawingActive: { type:Boolean, default:false },
 })
 
 const host = ref(null)
 const calibrationOpen = ref(false)
 const modelError = ref('')
+const modelPaused = ref(false)
+const renderBudget = createDrawRenderBudget()
 const calibrationNotice = ref('')
 const calibrationProfile = ref(props.firmware)
 const canAlignDown = computed(() => Number.isFinite(props.pendulumAngle) &&
@@ -87,7 +96,7 @@ const displayTuning = Object.freeze({
   fullSpeedDeg: 1,
 })
 const displayFloorY = -1
-let renderer, scene, camera, controls, base, armPivot, pendulumPivot, motorHalo, resizeObserver
+let renderer, scene, camera, controls, base, armPivot, pendulumPivot, resizeObserver
 let environmentTarget
 let pendulumLoad
 let raf = 0
@@ -121,7 +130,7 @@ function alignDown(){
   calibrationNotice.value = `已按 ${props.pendulumAngle.toFixed(3)}° 对齐模型下垂；原始读数不变`
 }
 watch([()=>props.firmware,()=>props.session], ([firmware])=>{
-  if(['SG21','SA21','SP24','V1','V2','V3','V4','V5'].includes(firmware) && firmware!==calibrationProfile.value){
+  if((isFd2(firmware) || ['SG21','SA21','SP24'].includes(firmware)) && firmware!==calibrationProfile.value){
     calibrationProfile.value=firmware
     Object.assign(calibration,loadCalibration())
     calibrationNotice.value=''
@@ -154,7 +163,10 @@ watch(
       }
     }
     lastSampleTick = tick
-    acceptAngleSample(armSamples, props.armAngle, props.armVelocity, sampleClock, firstTimedSample)
+    // FD2 positions come from fresh coherent T frames. D-frame speed has its
+    // own timestamp and must not veto a newer encoder position during motion.
+    const armValidationVelocity = isFd2(props.firmware) ? null : props.armVelocity
+    acceptAngleSample(armSamples, props.armAngle, armValidationVelocity, sampleClock, firstTimedSample)
     acceptAngleSample(pendulumSamples, props.pendulumAngle, props.pendulumVelocity, sampleClock, firstTimedSample)
     mapPoseTargets()
   },
@@ -245,17 +257,6 @@ function addCylinder(parent, radiusTop, radiusBottom, height, pos, material, rad
   parent.add(mesh)
   return mesh
 }
-function addHingeCylinder(parent, radius, depth, pos, material){
-  const mesh = addCylinder(parent, radius, radius, depth, pos, material, 48)
-  // CylinderGeometry starts along +Y. The real J280 hinge is radial, along +X.
-  mesh.rotation.z = -Math.PI / 2
-  return mesh
-}
-function addScrew(parent, x, z, y=.47){
-  const screw = addCylinder(parent, .045, .045, .035, [x, y, z], metal(0xbfc2c6,.22,.9), 24)
-  return screw
-}
-
 function initScene(){
   scene = new THREE.Scene()
   // Match the surrounding neutral surface so the mechanism stands on an open stage.
@@ -263,8 +264,8 @@ function initScene(){
 
   // Preserve the original 3/4 position/target; leave headroom for the upright rod.
   camera = new THREE.PerspectiveCamera(44, 1, .1, 100)
-  camera.position.set(5.45, 3.75, 6.55)
-  camera.lookAt(.30, 1.26, 0)
+  camera.position.set(8.0, 6.2, 9.8)
+  camera.lookAt(.45, 2.35, 0)
 
   renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true, powerPreference:'high-performance' })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
@@ -287,7 +288,7 @@ function initScene(){
   pmrem.dispose()
 
   controls = new OrbitControls(camera, renderer.domElement)
-  controls.target.set(.30, 1.26, 0)
+  controls.target.set(.45, 2.35, 0)
   controls.enableDamping = true
   controls.dampingFactor = .08
   controls.enableRotate = true
@@ -354,10 +355,6 @@ function initScene(){
   const baseSteel = metal(0xb8bbbf,.34,.70)
   const darkSteel = metal(0x36383b,.38,.72)
   const silver = metal(0xd9dbde,.24,.85)
-  const armSilver = metal(0xd0d2d5,.25,.82)
-  const armEdge = metal(0xb5b8bc,.28,.75)
-  const counterSteel = metal(0x898c91,.38,.70)
-  const rodSteel = metal(0xe5e7eb,.22,.85)
   const accent = new THREE.MeshStandardMaterial({
     color:0xcba365, emissive:0x382e1c, emissiveIntensity:.12,
     metalness:.68, roughness:.18,
@@ -428,73 +425,26 @@ function initScene(){
 
   setSceneMode(base, props.sceneMode)
 
-  // Square instrument base with mounting details.
-  addBox(base, [2.05,.38,1.48], [0,.19,0], baseSteel)
-  addBox(base, [1.76,.09,1.22], [0,.425,0], darkSteel)
-  addScrew(base,-.73,-.47)
-  addScrew(base,.73,-.47)
-  addScrew(base,-.73,.47)
-  addScrew(base,.73,.47)
-
-  // Motor / encoder stack.
-  addCylinder(base,.43,.43,.42,[0,.69,0],darkSteel)
-  addCylinder(base,.31,.31,.14,[0,.98,0],silver)
-  addCylinder(base,.25,.25,.24,[0,1.17,0],baseSteel)
-  addCylinder(base,.105,.105,.43,[0,1.48,0],silver)
-  addCylinder(base,.29,.29,.10,[0,1.69,0],darkSteel)
-
-  motorHalo = new THREE.Mesh(
-    new THREE.TorusGeometry(.37,.012,12,80),
-    new THREE.MeshBasicMaterial({ color:0xdbaa64, transparent:true, opacity:.45 })
-  )
-  motorHalo.rotation.x = Math.PI / 2
-  motorHalo.position.y = .49
-  base.add(motorHalo)
-
-  // Furuta arm: active side + short counterweight side.
-  armPivot = new THREE.Group()
-  armPivot.name = 'armPivot'
-  armPivot.position.set(0,1.70,0)
-  base.add(armPivot)
-
-  addBox(armPivot,[2.30,.105,.17],[1.09,0,0],armSilver)
-  addBox(armPivot,[.75,.11,.17],[-.38,0,0],armSilver)
-  addBox(armPivot,[.34,.30,.32],[-.78,.02,0],counterSteel)
-  addBox(armPivot,[.06,.14,.21],[2.20,0,0],armEdge)
-
-  // End encoder / hinge ring: both coaxial with the real local X hinge.
-  addHingeCylinder(armPivot,.19,.30,[2.23,0,0],darkSteel)
-  addHingeCylinder(armPivot,.135,.32,[2.23,0,0],silver)
-  const encoderRing = new THREE.Mesh(new THREE.TorusGeometry(.205,.022,12,64), accent)
-  encoderRing.position.set(2.23,0,0)
-  encoderRing.rotation.y = Math.PI / 2
-  armPivot.add(encoderRing)
-
-  pendulumPivot = new THREE.Group()
-  pendulumPivot.name = 'pendulumPivot'
-  pendulumPivot.position.set(2.23,0,0)
-  armPivot.add(pendulumPivot)
-
-  // STEP 自由端沿局部 +Y；仍由原 pendulumPivot 的 X 轴和原标定驱动。
-  // 原圆杆和球体示意由真实 L 形零件替换，转轴、遥测与显示滤波不变。
-  new GLTFLoader().loadAsync(pendulumAssetUrl).then(gltf=>{
+  // 原 STEP 装配拆分为固定部分、旋臂和摆杆，沿真实轴心联动。
+  new GLTFLoader().loadAsync(pendulumAssetUrl).then(gltf => {
     const model = gltf.scene
     if (destroyed) { disposePendulumModel(model); return }
     try {
-      mountPendulumModel(model,rodSteel)
-      pendulumPivot.add(model)
-      pendulumLoad = createPendulumLoad(model, pendulumAssetMetadata)
+      const assembly = mountAssembly(model)
+      base.add(assembly.root)
+      armPivot = assembly.armPivot
+      pendulumPivot = assembly.pendulumPivot
+      pendulumLoad = createPendulumLoad(assembly.pendulumModel, pendulumAssetMetadata)
       pendulumLoad.visible = props.loaded
-      updatePendulumLoadPose(pendulumLoad, currentPendulum)
       pendulumPivot.add(pendulumLoad)
     } catch (error) {
       disposePendulumModel(model)
       throw error
     }
-  }).catch(error=>{
+  }).catch(error => {
     if (destroyed) return
-    modelError.value = '摆杆模型加载失败，请刷新页面'
-    console.error('STEP 摆杆资产加载失败',error)
+    modelError.value = '倒立摆装配模型加载失败，请刷新页面'
+    console.error('IP570 装配资产加载失败', error)
   })
 
   resizeObserver = new ResizeObserver(resize)
@@ -512,6 +462,7 @@ function resetView(){
   controls.enableDamping = false
   controls.update()
   controls.reset()
+  resize()
   controls.enableDamping = damping
 }
 function resize(){
@@ -523,8 +474,14 @@ function resize(){
   const leftOverflow = Math.max(0, -host.value.offsetLeft)
   const topOverflow = Math.max(0, height - stageHeight)
   renderer.setSize(width, height, false)
-  // 绘制范围向上、向两侧扩展；原场景的尺寸、中心和 OrbitControls 视角保持不变。
-  camera.setViewOffset(stageWidth, stageHeight, -leftOverflow, -topOverflow, width, height)
+  // Keep display magnification independent of the assembly's mechanical dimensions.
+  const displayStyle = getComputedStyle(host.value)
+  const displayZoom = Number.parseFloat(displayStyle.getPropertyValue('--model-view-zoom'))
+  const displayLift = Number.parseFloat(displayStyle.getPropertyValue('--model-view-lift'))
+  camera.zoom = Number.isFinite(displayZoom) && displayZoom > 0 ? displayZoom : 1
+  // 扩展画布保留跨列绘制，显示倍率独立于机械尺寸和旋转中心。
+  camera.setViewOffset(stageWidth, stageHeight, -leftOverflow,
+    -topOverflow + (Number.isFinite(displayLift) ? displayLift : 0), width, height)
   camera.updateProjectionMatrix()
 }
 function angleDelta(a, b){
@@ -542,14 +499,13 @@ function pendulumSmoothing(smoothing){
   // Genuine motion uses the original fast response and steady angles remain exact.
   return THREE.MathUtils.lerp(Math.max(smoothing, displayTuning.balanceSmoothing), smoothing, motion)
 }
-function modeColor(){
-  if (props.mode === 'BALANCE') return 0x238353
-  if (props.mode === 'SWING') return 0xa3701d
-  if (props.mode === 'FAULT') return 0xc43737
-  return 0xb29b70
-}
 function animate(now){
   raf = requestAnimationFrame(animate)
+  if(!renderBudget.shouldRender(now,props.drawingActive)){
+    modelPaused.value=renderBudget.paused(props.drawingActive)
+    return
+  }
+  modelPaused.value=false
   const previousFrameTime = lastFrameTime ?? now
   const dt = Math.max(0, (now - previousFrameTime) / 1000)
   lastFrameTime = now
@@ -561,21 +517,16 @@ function animate(now){
   currentPendulum = angleLerp(currentPendulum, targetPendulum, alphaBlend)
   if (armPivot) armPivot.rotation.y = currentArm
   if (pendulumPivot) pendulumPivot.rotation.x = currentPendulum
-  if (pendulumLoad) updatePendulumLoadPose(pendulumLoad, currentPendulum)
   // 轮计数、舵机比较值尚无机械标定；底盘保持示意，不从指令推算运动。
-
-  const color = modeColor()
-  if (motorHalo){
-    motorHalo.material.color.setHex(color)
-    motorHalo.material.opacity = .24
-  }
 
   controls.update()
   // Orbit remains above the floor even after a downward right-button pan.
   const lift = Math.max(0, displayFloorY + .2 - controls.target.y)
   controls.target.y += lift
   camera.position.y += lift
+  const renderStart=performance.now()
   renderer.render(scene, camera)
+  renderBudget.record(now,performance.now()-renderStart,props.drawingActive,now-previousFrameTime)
 }
 
 onMounted(initScene)

@@ -27,7 +27,8 @@ export function requestLabel(record) {
 }
 
 export function reconcileRequest(record, state) {
-  const result = state.requests?.[record.request_id]
+  const sameSession = record.host_session === state.session && record.host_firmware === state.firmware
+  const result = sameSession ? state.requests?.[record.request_id] : undefined
   const next = result ? { ...record, ...result } : { ...record }
   if (['queued', 'pending', 'accepted', 'stopping'].includes(next.state) &&
       (!state.status_fresh || record.host_session !== state.session || record.host_firmware !== state.firmware)) {

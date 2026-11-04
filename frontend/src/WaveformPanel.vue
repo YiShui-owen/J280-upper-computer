@@ -1,6 +1,6 @@
 <template>
   <div class="waveform-panel" @pointerenter="enterHistory" @pointermove="trackPointer" @pointerleave="leaveHistory">
-    <div ref="chartRef" class="waveform-chart" role="img" :aria-label="(firmware === 'SP24' || /^V[1-5]$/.test(firmware)) ? `最近${windowMs / 1000}秒摆角与参考、旋臂与参考及目标、实际PWM板端时间波形；局部原点计数${originCount || '未知'}` : `最近${windowMs / 1000}秒摆杆偏角、摆杆角速度与PWM波形`"></div>
+    <div ref="chartRef" class="waveform-chart" role="img" :aria-label="(firmware === 'SP24' || isFd2(firmware)) ? `最近${windowMs / 1000}秒摆角与参考、旋臂与参考及目标、实际PWM板端时间波形；局部原点计数${originCount || '未知'}` : `最近${windowMs / 1000}秒摆杆偏角、摆杆角速度与PWM波形`"></div>
     <div v-if="!hasData" class="waveform-empty" role="status">暂无数据</div>
   </div>
 </template>
@@ -21,7 +21,7 @@ const props = defineProps({
   firmware: { type: String, default: '' },
   originCount: { type: String, default: '' },
   session: { type: String, default: '' },
-  angleExtent: { type: Number, default: 30 },
+  angleExtent: { type: Number, default: 60 },
 })
 const emit = defineEmits(['window-change'])
 const windowMs = ref(10000)

@@ -8,14 +8,25 @@ if not exist "%HOST_PYTHON%" (
   exit /b 1
 )
 echo Select the firmware already programmed on J280.
-echo 1. V1  Three swing-up profiles
-echo 2. V2  SWM4 and optical gestures
-echo 3. V3  Manual balance and adaptive angle P/D
-echo 4. V4  Three swing-up profiles and six positions
-echo 5. V5  Manual balance, six positions and six trajectories
+echo 1. ADB1 07 CommandFlow / S1 - USB, SWM4 and gestures
+echo 2. V4 USB + BLE - 5634523A, six relative positions
+echo 3. G3 C1 - USB and GOWIN mapped display
+echo 4. DS13 R2 - USB and live drawing
 echo Close the previous Host before using port 8371.
-choice /c 12345 /n /m "Select V1-V5: "
-set "HOST_VARIANT=V%ERRORLEVEL%"
+echo Start offline; connect the matching device explicitly in the Host window.
+choice /c 1234 /n /m "Select 1-4: "
+set "HOST_VARIANT="
+if "%ERRORLEVEL%"=="1" set "HOST_VARIANT=ADB1_07"
+if "%ERRORLEVEL%"=="2" set "HOST_VARIANT=V4_USB_BLE"
+if "%ERRORLEVEL%"=="3" set "HOST_VARIANT=G3_C1"
+if "%ERRORLEVEL%"=="4" set "HOST_VARIANT=DS13"
+if "%HOST_VARIANT%"=="V4_USB_BLE" set "HOST_PYTHON=%ROOT%host\v4_usb_ble\PC_Bluetooth\runtime\python.exe"
+if "%HOST_VARIANT%"=="DS13" set "HOST_PYTHON=%ROOT%host\ds13\releases\20261103_r2\DS13_App\runtime\python.exe"
+if not exist "%HOST_PYTHON%" (
+  echo Missing bundled runtime for %HOST_VARIANT%.
+  pause
+  exit /b 1
+)
 pushd "%ROOT%"
 "%HOST_PYTHON%" -B -X utf8 "%ROOT%launch_host.py" "%HOST_VARIANT%"
 set "HOST_EXIT=%ERRORLEVEL%"

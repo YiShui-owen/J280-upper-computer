@@ -1,5 +1,13 @@
 # L 形摆杆模型
 
+## IP570 完整装配（当前网页使用）
+
+`ip570.step` 是 2026-10-27 用户提供的完整装配，SHA-256 为 `99a7fa542987db39db40f5c85ebb82de1ed1824d97d0493bfde17e6b81f0ebfa`，与此前折边朝外 SolidWorks 交付记录中的原 STEP 哈希一致。网页使用 `src/assets/models/ip570.glb`；原 L 形摆杆资产留作追溯。
+
+离线转换脚本 `tools/convert-ip570.mjs` 将 28 个网格按固定部分、电机旋臂和竖直摆杆分组，以电机轴和角位移传感器轴为旋转中心；等比例缩放只用于显示。原 STEP 是翻面前姿态，转换时依照 SolidWorks 交付的记录将竖直摆臂绕竖直中心线旋转 180°，并将 6 mm 法兰绕轴转动 41.1092176599315°。两轴姿态仍由现有遥测和显示标定驱动；“有负载”只添加示意挂钩，不表示负载检测或控制参数变化。
+
+使用原有转换工具重新生成：在 `frontend` 下设置 `OCCT_IMPORT_JS` 指向 `occt-import-js@0.0.23` 安装目录，运行 `node tools/convert-ip570.mjs`。其后运行 `node --test tests/pendulumAssembly.test.js`。原 SolidWorks 交付注明传感器内部空腔存在继承的 STEP 导入异常；网页显示不构成该部分实体几何的修复或认证。
+
 `l-arm.step` 是用户提供的 `L型摆臂(1).STEP` 原件副本。源单位为毫米，实体共 36 个面，外形尺寸约 36 × 40 × 152 mm。网页加载 `src/assets/models/l-pendulum.glb`，不在浏览器中解析 STEP。
 
 转换以 CAD 坐标 `(0, -2, 67.5)` mm 为原点，即轴端直径 7 mm 孔的中心、板厚中面。轴向从 CAD Y 变为显示 X，自由端指向显示 +Y；网格以米存储，几何比例不变。`l-pendulum.meta.json` 记录源文件 SHA256、坐标变换、网格尺寸和转换精度。

@@ -1,5 +1,6 @@
 """Full FD2 cursor drain and 120-second history in the real Hub, no sockets."""
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -10,6 +11,48 @@ from test_fd2_telemetry import frame, snapshot
 
 
 class FD2HubTests(unittest.IsolatedAsyncioTestCase):
+    async def run_poll_clock(self, latest, costs):
+        hub = main.Hub()
+        hub.latest.update(latest)
+        clock = 0.0
+        starts, sleeps = [], []
+
+        async def poll():
+            nonlocal clock
+            starts.append(clock)
+            clock += costs[len(starts)-1]
+
+        async def sleep(delay):
+            nonlocal clock
+            sleeps.append(delay)
+            clock += delay
+            if len(sleeps) == len(costs):
+                raise main.asyncio.CancelledError
+
+        with patch.object(hub, 'poll_once', side_effect=poll), \
+             patch.object(main, 'time', SimpleNamespace(monotonic=lambda:clock)), \
+             patch.object(main.asyncio, 'sleep', side_effect=sleep):
+            with self.assertRaises(main.asyncio.CancelledError):
+                await hub.loop()
+        return starts, sleeps
+
+    async def test_fd2_poll_cadence_includes_processing_time_and_does_not_queue_overruns(self):
+        for firmware in ('V1', 'V2', 'V3', 'V4', 'V5', 'ADB1'):
+            with self.subTest(firmware=firmware):
+                starts, sleeps = await self.run_poll_clock(
+                    dict(host_online=True, firmware=firmware), [.005, .020, .060, .005])
+                self.assertAlmostEqual(starts[1]-starts[0], 1/30)
+                self.assertAlmostEqual(starts[2]-starts[1], 1/30)
+                self.assertAlmostEqual(starts[3]-starts[2], .060)
+                self.assertEqual(sleeps[2], 0)
+
+    async def test_legacy_and_offline_retry_delays_remain_unchanged(self):
+        for latest, expected in [(dict(host_online=True, firmware='SP24'), .12),
+                                 (dict(host_online=False, firmware=None), .5)]:
+            starts, sleeps = await self.run_poll_clock(latest, [.005, .005])
+            self.assertEqual(sleeps, [expected, expected])
+            self.assertAlmostEqual(starts[1], expected+.005)
+
     async def test_known_host_rejection_is_not_reported_as_unknown_or_retried(self):
         client = Mock(); client.status.return_value = snapshot()
         error = BridgeError('replay rejects hardware commands')

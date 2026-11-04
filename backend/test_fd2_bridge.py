@@ -3,6 +3,37 @@ from host.fd2_bridge import Bridge, load_upstream, json_safe
 
 
 class BridgeTests(unittest.TestCase):
+    def test_live_waveform_page_does_not_scan_the_entire_ring(self):
+        from collections import deque
+        class CountedDeque(deque):
+            visits=0
+            def __iter__(self):
+                for item in super().__iter__():
+                    self.visits+=1;yield item
+            def __reversed__(self):
+                for item in super().__reversed__():
+                    self.visits+=1;yield item
+        b=Bridge(5);b.rows=CountedDeque(({'cursor':n} for n in range(1,64001)),maxlen=64000);b.cursor=64000
+        self.assertEqual([r['cursor'] for r in b.waveform(after=63995,limit=5)['samples']],[63996,63997,63998,63999,64000])
+        self.assertLessEqual(b.rows.visits,10)
+        b.rows.visits=0
+        self.assertEqual([r['cursor'] for r in b.waveform(after=0,limit=3)['samples']],[1,2,3])
+        self.assertLessEqual(b.rows.visits,3)
+
+    def test_waveform_fast_pages_match_original_cursor_and_overrun_semantics(self):
+        from collections import deque
+        b=Bridge(5);rows=[{'cursor':n} for n in range(9,26)]
+        b.rows=deque(rows,maxlen=17);b.cursor=25
+        for after in range(0,29):
+            for stream in (None,'other-session'):
+                for limit in (1,3,10,30):
+                    overrun=bool(stream and stream!=b.session) or after<8 or after>25
+                    expected=[r for r in rows if overrun or r['cursor']>after][:limit]
+                    actual=b.waveform(after=after,stream=stream,limit=limit)
+                    self.assertEqual(actual['samples'],expected,(after,stream,limit))
+                    self.assertEqual(actual['overrun'],overrun)
+                    self.assertEqual(actual['cursor'],expected[-1]['cursor'] if expected else 25)
+
     def test_ring_wide_cursor_and_gap(self):
         b = Bridge(5, capacity=3)
         for n in range(5):

@@ -5,6 +5,7 @@ from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 import importlib.util
+from itertools import islice
 import json
 import math
 import re
@@ -173,7 +174,21 @@ class Bridge:
             head = self.rows[0]["cursor"] if self.rows else self.cursor
             mismatch = bool(stream and stream != self.session)
             overrun = mismatch or after < head - 1 or after > self.cursor
-            selected = [r for r in self.rows if overrun or r["cursor"] > after][:limit]
+            # Cursors are contiguous in this ring. A live reader is normally
+            # near the tail; walking 64,000 rows for every small page holds the
+            # same lock needed by time-sensitive drawing commands.
+            count = len(self.rows)
+            if not count:
+                selected = []
+            elif overrun:
+                selected = list(islice(iter(self.rows), limit))
+            else:
+                start = max(0, after - head + 1)
+                stop = min(start + limit, count)
+                if start <= count - stop:
+                    selected = list(islice(iter(self.rows), start, stop))
+                else:
+                    selected = list(reversed(list(islice(reversed(self.rows), count - stop, count - start))))
             return dict(
                 stream=self.session,
                 cursor=selected[-1]["cursor"] if selected else self.cursor,
@@ -452,7 +467,10 @@ class Bridge:
                         raise ValueError("Content-Length must be 1..8192")
                     self.reply(200, bridge.command(json.loads(self.rfile.read(length))))
                 except (ValueError, TypeError, KeyError) as exc:
-                    self.reply(400, {"error": str(exc)})
+                    result = {"error": str(exc)}
+                    if getattr(exc, "code", None):
+                        result["code"] = exc.code
+                    self.reply(400, result)
 
         self.server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
         threading.Thread(

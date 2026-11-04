@@ -62,13 +62,28 @@ class CarApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_intent_requires_strict_session_sequence_and_allowed_controls(self):
         valid = dict(session='current', sequence=1, direction='FWD', steering='LEFT')
         self.assertEqual((await request(self.app, '/car/intent', valid))[0], 200)
-        self.fake.intent.assert_called_once_with('current', 1, 'FWD', 'LEFT')
+        self.fake.intent.assert_called_once_with('current', 1, 'FWD', 'LEFT', 1024, 0, 50, 100)
         for changes in (dict(sequence=True), dict(sequence='2'), dict(sequence=-1),
                         dict(direction='FAST'), dict(steering='LOCK'), dict(session=''),
                         dict(sequence=9007199254740992), dict(speed=10)):
             with self.subTest(changes=changes):
                 self.assertEqual((await request(self.app, '/car/intent', valid | changes))[0], 422)
         self.assertEqual(self.fake.intent.call_count, 1)
+
+    async def test_v83_routes_strict_and_once(self):
+        for path, payload, expected in (
+            ('profile', dict(session='current', profile=1), ('current', 1)),
+            ('boost', dict(session='current', sequence=2, peak_q8=2048), ('current', 2, 2048)),
+            ('brake', dict(session='current'), ('current',))):
+            getattr(self.fake,path).return_value=dict(accepted=True)
+            self.assertEqual((await request(self.app,'/car/'+path,payload))[0],200)
+            getattr(self.fake,path).assert_called_once_with(*expected)
+        for payload in (dict(session='current',profile=True),dict(session='current',profile=2)):
+            self.assertEqual((await request(self.app,'/car/profile',payload))[0],422)
+        valid=dict(session='current',sequence=3,direction=None,steering='CENTER',route=1)
+        self.assertEqual((await request(self.app,'/car/intent',valid))[0],200)
+        for changes in (dict(direction='FWD'),dict(steering='LEFT'),dict(speed_q8=127),dict(slow_percent=True),dict(steer_percent=101)):
+            self.assertEqual((await request(self.app,'/car/intent',valid|changes))[0],422)
 
     async def test_service_failure_preserves_chinese_reason_and_no_retry(self):
         from car_service import CarError

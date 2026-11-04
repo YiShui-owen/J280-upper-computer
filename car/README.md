@@ -1,23 +1,28 @@
 # 小车 BLE 配套依赖
 
-`vendor/` 原样保存用户附件 `SmartCarBluetooth_Current_20261011(1).zip` 中运行必要的两个源码，逐字节 SHA-256 见 `MANIFEST_SHA256.json`。附件内来源路径为 `SmartCarBluetooth_Current_20261011/Smart_Car_CLI/scripts/bluetooth_client.py` 与同目录 `wireless_client.py`。原 ZIP SHA-256 为 `382b59bb7a1edbba690d712798f514a9bab60c4053ca77ad8a9d2606c07ce282`。
+当前网页使用用户交付 `SmartCar_Steering_V8_3_Trajectory_20261017.zip` 的 **RC83 / CAR8** 协议。原 ZIP SHA256 为 `5980839129e0fb9e4243bc5110619658120c716dd36a956b815f1544cae1473c`。`v83/` 原字节保存三个 `speed_*.py` 模块、配套 bin/hex、构建报告及原合同；来源见 [SOURCE.md](v83/SOURCE.md)，逐文件 SHA256 见 [MANIFEST_SHA256.json](v83/MANIFEST_SHA256.json)。原控制算法、参数默认值、协议、限幅和保护没有修改。
 
-后端只使用当前 BLE100 GATT 驱动和 `BLUETOOTH_HOLD_V2` 身份，复用原始流同步、ASCII/CAR2 校验、`control_step`、`new_control`、`keepalive`、`start_drive`、`stop_and_confirm`。原控制算法、参数、限幅与停车规则未改。文件中随交付存在的 SPP、TCP、模拟器入口未由网页注册或调用。未打包附件扩展、固件、烧录工具、GUI 或项目级指令。
+`backend/car_v83_service.py` 在单一所有者线程中创建原 `Session`、`Engine`、`BleTransport`，复用完整握手、CAR8 校验、档位读回、D/B/BRAKE、T/U/K、停车确认和恢复规则。运行入口只创建真实 BLE 传输；模拟器只用于离线测试。现有 Python 3.13 环境使用 `backend/requirements.txt` 中的 `bleak==3.0.2`，不加载交付包 CPython 3.14 扩展。
 
-`backend/car_service.py` 为网页连接增加一个 BLE 独占线程、显式搜索选择、随机控制会话、递增输入序号与单调时间 0.2 秒输入租约。输入只由 HTTP 接收路径更新；后台不会替网页续租。输入过期后确认停车，并要求新的全中性输入。即使中性输入和下一次方向输入在同一线程周期内到达，也会保留已经发生的租约中断。显式 STOP 成功后保留连接并换控制会话，旧输入、旧 STOP 与旧断开请求均不能操作新会话。网页仍须由用户手动启用遥控。
+搜索、选择、连接和启用全部显式操作，没有自动连接或重连。身份校验只接受配套 RC83。配套固件归档在 `v83/firmware`，不会自动烧录；板上版本需要用户现场确认。构造服务和查询状态不启动 BLE。
 
-`connected` 与 `identified` 仅在原始 GATT/同步/身份校验及本次 STOP 后新静止读回均通过时成立。`feedback_fresh` 独立按实际 CAR2 接收时间判断，阈值为 0.5 秒；缓存读数不更新时间。`received_at` 为本机秒时间戳，`telemetry` 原样保留固件 CAR2 字段，不把控制目标换算成车速或位移。反馈过期的缓存仍可供诊断，界面须根据新鲜度收起实时读数。
+网页输入采用随机会话、递增安全整数序号和200ms租约，只有 HTTP 输入接收路径续租。断档锁存直到所有者停车，再等待全中性输入；迟来的中性和运动输入不能掩盖断档。STOP/BRAKE/断开立即撤销最新意图，中断在途 ARM；出队再次检查会话，确认新静止反馈后轮换 token，旧请求不能恢复动作。故障锁定输入；同一 GATT 仅尝试一次原停车流程，之后须显式 STOP 重新握手；真实断链关闭且不重连。
 
-连续 CAR2 的新鲜度仅控制读数呈现。初次验证后，即使暂时没有 CAR2，只要原始命令 ACK 正常且网页输入租约有效，仍可显式遥控；每次停止仍要求原驱动收到本次 STOP 的 ACK 和其后的新静止 CAR2，缺失时关闭连接并报告停车未确认。
+急加速为一次性操作，不自动重试；原 Engine 检查快速档、持续手动前进、回正、新鲜活动反馈及峰值条件。BRAKE 与普通 STOP 使用不同原指令。八条轨迹沿用原时限、转向和停止规则，完成后按住不重复启动；必须释放再按。手动转向幅度按原确认的左右限位620/980分别缩放，中心750，不把非对称限位改成对称角度。
 
-明确的当前动作电机故障仅在原驱动证据和新停车读回确认后保持连接，松开输入才能继续操作；未知异常或停车无法确认则关闭连接并报告错误。关闭后端会撤销输入，在线程内调用原始确认停车与断开，并等待该线程结束。BLE 固件租约是进程或网络突然中断时的最后保护；离线测试不能证明物理停止距离、无线时延或实车状态。
+状态中的 `telemetry` 保留原 CAR8 字段，`profile` 仅取真实反馈。主帧没有配套辅助帧时，外层增加 `encoder_valid=false` 并将四个编码器字段置空，网页显示 `--`；配套辅助帧晚到可补齐同一快照。`received_at` 是本机秒时间戳，只由实际新主反馈推进；辅助包、重复包和状态轮询不能续新鲜度。后端沿用原 `FEEDBACK_SECONDS=1.2`，网页在1秒内展示，过期收起。编码器计数和目标速度不换算成未经标定的物理速度或位移。
 
-运行依赖见 `backend/requirements.txt`，现有 Python 3.13 环境使用 `bleak==3.0.2`，不加载交付包的 CPython 3.14 扩展。后端构造与状态查询不搜索、不连接、不自动重连。接口为 `/car/status`、`/car/scan`、`/car/connect`、`/car/intent`、`/car/stop`、`/car/disconnect`。
+普通STOP等待期间可用同一停车事务的token追加一次BRAKE，所有者取消普通停车等待，再调用原急刹流程。两请求统一在新静止反馈后得到新会话；轮换之后旧token仍拒绝。该机制不表示无线指令或物理制动即时完成，底层阻塞写仍受原传输超时约束。
 
-验证仅使用 `backend/test_car_service.py` 中明示的假物理传输与原始解析器，以及 ASGI 接口 fixture：
+|接口|用途|
+|---|---|
+|`GET /car/status`|连接、身份、反馈、阶段、故障和中性要求|
+|`POST /car/scan`、`/car/connect`|显式搜索、按选择连接|
+|`POST /car/intent`|会话/序号、方向/转向、速度、轨迹、慢段比例、手动转向幅度|
+|`POST /car/profile`|停车后切换普通/快速档并等待读回|
+|`POST /car/boost`|带会话/序号的一次性急加速|
+|`POST /car/stop`、`/car/brake`、`/car/disconnect`|独立停车、急刹、断开及输入撤销|
 
-```powershell
-.\.venv\Scripts\python.exe -B -X utf8 -m unittest discover -s backend
-```
+HTTP 参数范围和互斥检查见 `backend/car_api.py`，接入设计见 [设计记录](../docs/superpowers/specs/2026-10-27-car-v83-design.md)，测试及实机边界见 [验证记录](../docs/car-v83-validation-20261027.md)。后端关停会撤销输入，在所有者线程停车并断开。BLE 固件租约仍是进程或网络突然中断时的最后保护。
 
-本次未执行 BLE 搜索、连接、运动、COM/JTAG 操作或固件维护，实车方向、停车、故障和无线断流仍需人工验收。
+旧 `vendor/`、根 `MANIFEST_SHA256.json` 和 `backend/car_service.py` 保留 2026-10-11 的 `BLUETOOTH_HOLD_V2 / CAR2` 历史依赖与回归测试，不再注册为网页入口。旧 ZIP SHA256 为 `382b59bb7a1edbba690d712798f514a9bab60c4053ca77ad8a9d2606c07ce282`。不混用两个版本的身份或停车规则。

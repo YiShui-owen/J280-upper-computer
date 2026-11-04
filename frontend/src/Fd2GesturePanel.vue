@@ -19,12 +19,12 @@
 <script setup>
 import {computed,ref,watch} from 'vue'
 import GestureIcon from './GestureIcon.vue'
-import {gestureLabels,isNewFd2Gesture} from './fd2Presentation.js'
+import {gestureEventLabel,isNewFd2Gesture} from './fd2Presentation.js'
 const props=defineProps({state:{type:Object,required:true},fresh:Boolean})
 const icons={1:'right',2:'left',3:'up',4:'down',5:'near',6:'far',7:'turn',8:'reverse-turn',9:'hand'}
 const code=ref(null),lastCode=ref(null),retained=ref(true),feedbackId=ref(0),activeUntil=ref(0)
 const active=computed(()=>props.fresh && (props.state.presentation_now_ms??Date.now()) < activeUntil.value)
-const label=value=>value===9?'挥手':gestureLabels[value] || '—'
+const label=value=>!['ADB1','ADB1_FASTP','ADB1_07'].includes(props.state.firmware) && value===9 ? '挥手' : gestureEventLabel(props.state.firmware,value)
 let previous
 watch([()=>props.state.firmware,()=>props.state.session,()=>props.state.gesture_event?.sequence,()=>props.fresh],()=>{
   if(!props.fresh) {
@@ -57,7 +57,7 @@ watch([()=>props.state.firmware,()=>props.state.session,()=>props.state.gesture_
 .recognition-display>.gesture-icon{width:56px;height:56px;color:#A6AA9B;flex:none}
 .recognition-display>div{display:flex;flex-direction:column;gap:8px;min-width:0}
 .recognition-display span{font-size:14px;color:#A6AA9B}
-.recognition-display strong{font-size:30px;line-height:1.3;font-weight:400;white-space:nowrap}
+.recognition-display strong{font-size:30px;line-height:1.3;font-weight:400;overflow-wrap:anywhere}
 .recognition-display.recognized{background:#655034;border-color:#DBAA64;animation:recognition-arrival .32s ease-out}
 .recognized>.gesture-icon,.recognized span,.recognized strong{color:#FFE0AE}
 .last-gesture{font-size:15px;color:#A6AA9B;margin:16px 0 28px;min-height:22px}

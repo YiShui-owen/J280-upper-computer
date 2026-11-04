@@ -8,15 +8,10 @@ export function createPendulumLoad(model, metadata) {
     .multiply(model.scale).applyQuaternion(model.quaternion).add(model.position))
 
   const steel = new THREE.MeshStandardMaterial({ color:0xdde0e2, metalness:.88, roughness:.23 })
-  const sand = new THREE.MeshStandardMaterial({ color:0xc6ae7c, roughness:1 })
-  const plastic = new THREE.MeshStandardMaterial({
-    color:0xd3dfd8, roughness:.22, transparent:true, opacity:.22,
-    side:THREE.DoubleSide, depthWrite:false,
-  })
   function mesh(parent, geometry, material, position = [0, 0, 0]) {
     const object = new THREE.Mesh(geometry, material)
     object.position.set(...position)
-    object.castShadow = material !== plastic
+    object.castShadow = true
     object.receiveShadow = true
     parent.add(object)
     return object
@@ -50,31 +45,5 @@ export function createPendulumLoad(model, metadata) {
     [0, -.50, .08], [0, -.535, -.025], [0, -.49, -.13], [0, -.40, -.17],
   ], .032, steel)
 
-  const weight = new THREE.Group()
-  weight.name = 'hanging-weight'
-  weight.position.set(0, -.52, -.025)
-  load.add(weight)
-  // 提梁挂在弯钩底部，半透明容器内装沙，保留可辨认的空余空间。
-  tube(weight, Array.from({ length:25 }, (_, index) => {
-    const angle = index * Math.PI / 24
-    return [.29 * Math.cos(angle), -.20 + .20 * Math.sin(angle), 0]
-  }), .017, steel)
-  mesh(weight, new THREE.CylinderGeometry(.27, .224, .44, 48), sand, [0, -.51, 0])
-  const grainMaterial = new THREE.MeshStandardMaterial({ color:0xdfc89a, roughness:1 })
-  const grainGeometry = new THREE.IcosahedronGeometry(.011, 0)
-  for (let index = 0; index < 64; index++) {
-    const angle = index * 2.399963
-    const radius = .25 * Math.sqrt((index + .5) / 64)
-    mesh(weight, grainGeometry, grainMaterial, [radius * Math.cos(angle), -.288, radius * Math.sin(angle)])
-  }
-  mesh(weight, new THREE.CylinderGeometry(.30, .245, .57, 48, 1, true), plastic, [0, -.46, 0])
-  mesh(weight, new THREE.CylinderGeometry(.245, .245, .025, 48), plastic, [0, -.745, 0])
-  const rim = mesh(weight, new THREE.TorusGeometry(.30, .014, 10, 48), steel, [0, -.175, 0])
-  rim.rotation.x = Math.PI / 2
   return load
-}
-
-export function updatePendulumLoadPose(load, pendulumAngle) {
-  // 仅把容器画成竖直悬挂；挂点仍跟随原摆杆，不生成独立摆动。
-  load.getObjectByName('hanging-weight').rotation.x = -pendulumAngle
 }

@@ -9,8 +9,8 @@ let mountPendulumModel, PENDULUM_DISPLAY
 try { ({ mountPendulumModel, PENDULUM_DISPLAY } = await import('../src/pendulumModel.js')) }
 catch (error) { if (error.code !== 'ERR_MODULE_NOT_FOUND') throw error }
 
-let createPendulumLoad, updatePendulumLoadPose
-try { ({ createPendulumLoad, updatePendulumLoadPose } = await import('../src/pendulumLoad.js')) }
+let createPendulumLoad
+try { ({ createPendulumLoad } = await import('../src/pendulumLoad.js')) }
 catch (error) { if (error.code !== 'ERR_MODULE_NOT_FOUND') throw error }
 
 async function model() {
@@ -92,34 +92,10 @@ test('挂载组件安装在 STEP 自由端孔位，切换可见性不改变摆�
   const hole = part.localToWorld(new THREE.Vector3(...metadata.freeEndHoleCenterMeters))
   assert.ok(load.getWorldPosition(new THREE.Vector3()).distanceTo(hole) < 1e-6, '挂钩紧固件对齐端部安装孔')
   assert.ok(load.getObjectByName('load-hook'), '包含金属挂钩')
-  assert.ok(load.getObjectByName('hanging-weight'), '包含悬挂重物')
+  assert.ok(!load.getObjectByName('hanging-weight'), '挂钩下不显示悬挂物')
   for (const visible of [false, true, false, true]) {
     load.visible = visible
     assert.ok(new THREE.Box3().setFromObject(part).equals(before), '切换不改变原摆杆位置和尺寸')
-  }
-})
-
-test('悬挂重物随挂点移动并保持竖直，向下姿态不穿过展示地面', async () => {
-  assert.equal(typeof updatePendulumLoadPose, 'function', '需要悬挂重物显示姿态')
-  const part = await model()
-  mountPendulumModel(part, new THREE.MeshStandardMaterial())
-  const metadata = JSON.parse(await fs.readFile(new URL('../src/assets/models/l-pendulum.meta.json', import.meta.url), 'utf8'))
-  const arm = new THREE.Group(), pivot = new THREE.Group()
-  arm.position.y = 1.70
-  pivot.position.x = 2.23
-  arm.add(pivot)
-  pivot.add(part)
-  const load = createPendulumLoad(part, metadata)
-  pivot.add(load)
-  const weight = load.getObjectByName('hanging-weight')
-  for (const yaw of [0, Math.PI / 2]) for (const angle of [0, Math.PI / 2, -Math.PI / 2, Math.PI]) {
-    arm.rotation.y = yaw
-    pivot.rotation.x = angle
-    updatePendulumLoadPose(load, angle)
-    arm.updateMatrixWorld(true)
-    const up = new THREE.Vector3(0, 1, 0).transformDirection(weight.matrixWorld)
-    assert.ok(up.distanceTo(new THREE.Vector3(0, 1, 0)) < 1e-6, '容器竖直悬挂，不随摆杆翻转')
-    assert.ok(new THREE.Box3().setFromObject(load).min.y > -1, '挂载模型不穿过地面')
   }
 })
 
